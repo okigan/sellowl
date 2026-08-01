@@ -484,6 +484,46 @@ class TestBuildVerdict:
         assert verdict.target_high is not None
         assert verdict.target_low <= verdict.target <= verdict.target_high
 
+    def test_target_tracks_the_recommended_venue_not_always_ebay(self) -> None:
+        """Real user-reported confusion: the UI showed "Target $17" right
+        next to "sell local" (where asks run $50) -- self-contradictory on
+        its face. When local is the actual recommendation, target must be
+        the local band, not the eBay sold band, so the displayed number
+        matches the recommended action.
+        """
+        verdict = build_verdict(
+            ask_price=18.0,
+            sold_prices=[7, 10, 13, 17, 18, 19, 19, 47],
+            local_prices=[45, 50, 55, 60, 65, 70, 75, 80],
+            attributes={},
+            condition=Condition.CLEAN,
+            fees=FEES,
+            min_comps=5,
+        )
+        assert verdict.recommended_venue is not None
+        assert verdict.recommended_venue.value == "fb_local"
+        assert verdict.local_band is not None
+        assert verdict.target == verdict.local_band.p50
+        assert verdict.target_low == verdict.local_band.p25
+        assert verdict.target_high == verdict.local_band.p75
+        assert verdict.sold_band is not None
+        assert verdict.target != verdict.sold_band.p50
+
+    def test_target_stays_on_sold_band_when_ebay_wins(self) -> None:
+        verdict = build_verdict(
+            ask_price=210.0,
+            sold_prices=[200, 205, 210, 215, 220],
+            local_prices=[40.0],
+            attributes={"size_class": "small"},
+            condition=Condition.CLEAN,
+            fees=FEES,
+            min_comps=5,
+        )
+        assert verdict.recommended_venue is not None
+        assert verdict.recommended_venue.value == "ebay_sold"
+        assert verdict.sold_band is not None
+        assert verdict.target == verdict.sold_band.p50
+
     def test_reason_names_the_condition_grade(self) -> None:
         verdict = build_verdict(
             ask_price=10.0,
@@ -495,3 +535,56 @@ class TestBuildVerdict:
             min_comps=5,
         )
         assert "clean" in verdict.reason
+
+
+class TestVerdictReconciliation:
+    """The number the UI can't independently check is exactly the number a
+    confused user (or a reviewer) tries to check by hand: does
+    opportunity_usd == (whichever venue's net) - (what you net today)?
+    Before Verdict.current_net was exposed, the only "net" fields shown were
+    ebay_net (net proceeds AT THE SOLD MEDIAN — a different price entirely
+    from your actual ask) and local_net, neither of which is one of the two
+    numbers opportunity_usd is actually computed from. That looked like the
+    math didn't add up because it genuinely could not be verified from what
+    was shown. This is now a permanent, real-numbers golden check.
+    """
+
+    @pytest.mark.parametrize(
+        ("ask", "sold", "local", "size_class"),
+        [
+            # eBay wins: small item, weak local comps.
+            (50.0, [100, 105, 110, 115, 120], [40, 45, 50], "small"),
+            # Local wins on genuinely higher local asks.
+            (100.0, [200, 205, 210, 215, 220], [195, 200, 205], "large"),
+            # Local wins purely by avoiding eBay's fee/shipping, at a LOWER
+            # local price than eBay's own median — the case that read as
+            # most contradictory before current_net was exposed.
+            (8.0, [6, 6, 7, 7, 8, 17], [5, 5, 5, 20], "small"),
+            # Overpriced, local wins.
+            (32.0, [10, 12, 13, 14, 14, 18, 20, 21], [45, 48, 50, 50, 52, 55, 58, 60], "medium"),
+            # Overpriced, eBay wins (local comps too weak to flip it).
+            (900.0, [100, 110, 120, 130, 140], [], "medium"),
+        ],
+    )
+    def test_opportunity_reconciles_exactly(
+        self, ask: float, sold: list[float], local: list[float], size_class: str
+    ) -> None:
+        verdict = build_verdict(
+            ask_price=ask,
+            sold_prices=sold,
+            local_prices=local,
+            attributes={"size_class": size_class},
+            condition=Condition.USABLE,
+            fees=FEES,
+            min_comps=5,
+        )
+        assert verdict.current_net is not None
+        assert verdict.current_net == pytest.approx(
+            net_proceeds_ebay(ask, shipping_estimate({"size_class": size_class}), FEES)
+        )
+        assert verdict.recommended_venue is not None
+        best_net = (
+            verdict.local_net if verdict.recommended_venue.value == "fb_local" else verdict.ebay_net
+        )
+        assert best_net is not None
+        assert verdict.opportunity_usd == pytest.approx(best_net - verdict.current_net)

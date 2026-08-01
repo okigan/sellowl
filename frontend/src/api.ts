@@ -22,6 +22,7 @@ export interface Verdict {
   recommended_venue: Venue | null;
   ebay_net: number | null;
   local_net: number | null;
+  current_net: number | null;
   opportunity_usd: number | null;
   shipping_estimate: number | null;
 }

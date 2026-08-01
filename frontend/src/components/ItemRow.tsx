@@ -88,6 +88,14 @@ export function ItemRow({ item, index }: { item: Item; index: number }) {
                 {" "}
                 ({money(verdict.target_low)}–{money(verdict.target_high)})
               </span>
+              {verdict.recommended_venue === "fb_local" && (
+                <span
+                  className="ml-1 text-[10px] text-muted/60"
+                  title="This target is from local asks, not the eBay sold band shown to the left."
+                >
+                  local
+                </span>
+              )}
             </span>
           ) : (
             <span className="text-muted/50">—</span>
@@ -113,6 +121,18 @@ export function ItemRow({ item, index }: { item: Item; index: number }) {
                     · shipping est. {money(verdict.shipping_estimate)} (rough, by size)
                   </span>
                 )}
+              </p>
+            )}
+
+            {verdict?.current_net !== null && verdict?.current_net !== undefined && (
+              <p className="pb-3 text-[12px] text-muted/60">
+                You'd net {money(verdict.current_net)} today at {money(item.ask_price)} on eBay
+                {" vs. "}
+                {money(
+                  verdict.recommended_venue === "fb_local" ? verdict.local_net : verdict.ebay_net,
+                )}{" "}
+                selling {verdict.recommended_venue === "fb_local" ? "locally" : "on eBay"} at the
+                target — the gap is the opportunity number.
               </p>
             )}
 

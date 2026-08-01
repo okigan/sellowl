@@ -107,6 +107,12 @@ class Verdict(BaseModel):
     recommended_venue: Venue | None = None
     ebay_net: float | None = None
     local_net: float | None = None
+    # What the current ask actually nets on eBay today -- the baseline
+    # opportunity_usd is computed against (best_net - current_net). Without
+    # this exposed, ebay_net (net proceeds AT THE SOLD MEDIAN, a different
+    # number) looks like it should reconcile with opportunity_usd and
+    # doesn't, which reads as the math not adding up.
+    current_net: float | None = None
     opportunity_usd: float | None = None
     shipping_estimate: float | None = None
 

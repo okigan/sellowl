@@ -146,6 +146,7 @@ def build_verdict(
 
     kind = classify(ask_price, sold_band)
 
+    current_net: float | None = None
     opportunity: float | None = None
     if ask_price is not None:
         current_net = net_proceeds_ebay(ask_price, shipping, fees)
@@ -155,17 +156,23 @@ def build_verdict(
     if local_band is not None and not local_trusted:
         reason += " (Local asks looked scattered/mismatched — ignored for pricing.)"
 
+    # Target tracks whichever venue is actually recommended, not always the
+    # eBay sold band: showing "$17" as the target right next to "sell local"
+    # (where asks run $50) contradicted the recommendation on its face.
+    target_band = local_band if venue is Venue.FB_LOCAL and local_band is not None else sold_band
+
     return Verdict(
         kind=kind,
         reason=reason,
         sold_band=sold_band,
         local_band=local_band,
-        target_low=sold_band.p25,
-        target_high=sold_band.p75,
-        target=sold_band.p50,
+        target_low=target_band.p25,
+        target_high=target_band.p75,
+        target=target_band.p50,
         recommended_venue=venue,
         ebay_net=ebay_net,
         local_net=local_net,
+        current_net=current_net,
         opportunity_usd=opportunity,
         shipping_estimate=shipping,
     )
