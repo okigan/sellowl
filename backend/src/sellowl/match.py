@@ -75,6 +75,28 @@ def parse_quantity(value: str) -> Quantity | None:
     return Quantity(amount, match.group(2).strip().lower().rstrip("s"))
 
 
+# Common spec units worth pulling straight out of a title. Not exhaustive —
+# just the units actually seen on comps during dev (storage, volume, packs).
+_CAPACITY_HINT_RE = re.compile(
+    r"\b(\d+(?:\.\d+)?)\s*-?\s*(GB|TB|MB|ML|L|OZ|PACK|PK)\b", re.IGNORECASE
+)
+
+
+def capacity_from_text(text: str) -> str | None:
+    """Best-effort capacity/spec straight from a title or description.
+
+    Vision extraction has run-to-run variance — the same photo can come back
+    with or without a `capacity` attribute across two separate calls, even
+    when the number is stated plainly in the title ("...4GB Keypad..."). This
+    is a cheap fallback for exactly that case, not a replacement for the
+    vision attribute when it *is* present.
+    """
+    match = _CAPACITY_HINT_RE.search(text)
+    if not match:
+        return None
+    return f"{match.group(1)}{match.group(2).upper()}"
+
+
 RANK_CONSTANT = 20
 RANK_WINDOW = 50
 

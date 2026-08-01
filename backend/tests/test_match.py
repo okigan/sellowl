@@ -12,6 +12,7 @@ from sellowl.match import (
     attributes_agree,
     build_fallback_queries,
     build_rrf_query,
+    capacity_from_text,
     condition_matched_prices,
     parse_quantity,
     quantity_scale_factor,
@@ -146,6 +147,23 @@ class TestParseQuantity:
 
     def test_zero_is_none(self) -> None:
         assert parse_quantity("0GB") is None
+
+
+class TestCapacityFromText:
+    def test_finds_capacity_mid_title(self) -> None:
+        """Vision extraction has run-to-run variance on whether it surfaces
+        this attribute at all; the title usually just says it."""
+        title = "Apricorn Aegis Secure Key 4GB Keypad Hardware Encrypted USB 2.0 FIPS Black"
+        assert capacity_from_text(title) == "4GB"
+
+    def test_normalizes_case(self) -> None:
+        assert capacity_from_text("Apricorn 16gb Aegis Secure Key") == "16GB"
+
+    def test_no_match_is_none(self) -> None:
+        assert capacity_from_text("Apricorn Aegis Padlock 3.0") is None
+
+    def test_pack_count_in_title(self) -> None:
+        assert capacity_from_text("Enermax Case Fan 3-Pack with Controller") == "3PACK"
 
 
 class TestQuantityScaleFactor:

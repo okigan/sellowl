@@ -16,7 +16,7 @@ import structlog
 from .config import Settings
 from .index import CompStore, ElasticCompStore, MemoryCompStore
 from .logging import get_logger
-from .match import apply_guards, condition_matched_prices
+from .match import apply_guards, capacity_from_text, condition_matched_prices
 from .models import Comp, Condition, Item, Job, JobStage, JobStatus, Venue, VisionResult
 from .pricing import FeeConfig, build_verdict
 from .sources import (
@@ -147,6 +147,15 @@ class Pipeline:
                         "condition_evidence": "From the seller's own listing (no photo grade).",
                     }
                 )
+            # Vision extraction has run-to-run variance on whether it surfaces
+            # a `capacity` attribute at all; the title usually states it
+            # plainly, so fall back to reading it straight from there.
+            if "capacity" not in result.attributes:
+                found = capacity_from_text(item.title)
+                if found:
+                    result = result.model_copy(
+                        update={"attributes": {**result.attributes, "capacity": found}}
+                    )
             item.vision = result
             job.stage.done += 1
 
@@ -271,6 +280,11 @@ class Pipeline:
             if graded is None:
                 out.append(comp)
                 continue
+            attributes = graded.attributes
+            if "capacity" not in attributes:
+                found = capacity_from_text(comp.title)
+                if found:
+                    attributes = {**attributes, "capacity": found}
             out.append(
                 comp.model_copy(
                     update={
@@ -280,7 +294,7 @@ class Pipeline:
                             else comp.condition
                         ),
                         "condition_evidence": graded.condition_evidence,
-                        "attributes": graded.attributes,
+                        "attributes": attributes,
                         "description": graded.canonical_description,
                     }
                 )
