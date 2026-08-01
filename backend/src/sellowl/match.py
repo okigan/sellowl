@@ -10,19 +10,70 @@ See docs/DESIGN.md § Matching.
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from typing import Any
 
 from .models import Comp
 
 # Attributes where a disagreement means it is a different product, not a
 # variant. Compared only when both sides actually have the attribute.
-# size_class deliberately excluded: it is a coarse, subjective LLM judgment
-# (small/medium/large/xlarge) that varies between two photos of the exact
-# same product depending on framing and context — useful for shipping-cost
-# estimation (see pricing.shipping_estimate), not reliable as an identity
-# signal, and firing on it dropped nearly every comp for every item once
-# vision started actually populating attributes on both sides.
+#
+# size_class and category are deliberately excluded, both for the same
+# reason: they are coarse, subjective LLM judgments whose exact wording can
+# vary between two separate calls on the exact same real product (small vs.
+# medium; "cooling fan" vs. "PC case fan") -- treating that phrasing drift as
+# a hard conflict is exactly what dropped nearly every comp once vision
+# started actually populating attributes on both sides (see git history).
+# size_class still feeds shipping-cost estimation (pricing.shipping_estimate)
+# and category is still shown for audit; neither gates matching.
+#
+# Numeric spec attributes (capacity, and any future one — volume, wattage,
+# pack count...) are handled separately, in SCALABLE_NUMERIC_ATTRIBUTES below,
+# not here: a difference there does not necessarily mean "different product",
+# it means "same product line, price should be scaled", so a plain string
+# hard-reject would throw away a usable comp instead of adjusting it.
 HARD_ATTRIBUTES = ("material", "brand", "era")
+
+# Attribute keys whose value is a free-text "amount + unit" spec (a package's
+# "4GB", "64 GB", "500ml", "2-pack") rather than a category label. Generic on
+# purpose: any attribute matching that shape can reuse the same parse-and-
+# scale mechanism below just by being added here and to the vision prompt —
+# no new parsing or pricing code needed per attribute.
+SCALABLE_NUMERIC_ATTRIBUTES = ("capacity",)
+
+# Rough heuristic, not calibrated against real data: bigger specs typically
+# cost less per unit (a 64GB drive rarely costs 16x a 4GB one), so scale
+# sub-linearly rather than 1:1. See docs/DESIGN.md § Matching if this needs
+# real calibration later.
+QUANTITY_SCALE_EXPONENT = 0.6
+
+_QUANTITY_RE = re.compile(r"^\s*([\d.]+)\s*-?\s*([a-zA-Z]*)")
+
+
+@dataclass(frozen=True)
+class Quantity:
+    """A parsed (amount, unit) pair, e.g. "64GB" -> Quantity(64.0, "gb")."""
+
+    amount: float
+    unit: str
+
+
+def parse_quantity(value: str) -> Quantity | None:
+    """Parse a free-text amount+unit spec. None if it doesn't look like one."""
+    if not value:
+        return None
+    match = _QUANTITY_RE.match(value.strip())
+    if not match:
+        return None
+    try:
+        amount = float(match.group(1))
+    except ValueError:
+        return None
+    if amount <= 0:
+        return None
+    return Quantity(amount, match.group(2).strip().lower().rstrip("s"))
+
 
 RANK_CONSTANT = 20
 RANK_WINDOW = 50
@@ -128,6 +179,32 @@ def attributes_agree(
     return True
 
 
+def quantity_scale_factor(item_attrs: dict[str, str], comp_attrs: dict[str, str]) -> float | None:
+    """Combined price-scaling factor across SCALABLE_NUMERIC_ATTRIBUTES.
+
+    1.0 when none of those attributes are present on both sides, or present
+    but equal (no adjustment needed). A ratio (raised to
+    QUANTITY_SCALE_EXPONENT) when they differ but parse with the same unit —
+    the caller applies this to the comp's price rather than rejecting it.
+    None when a spec is present on both sides but cannot be reconciled
+    (different units, or either side doesn't parse) — a real product
+    difference the caller should reject, not silently ignore or mis-scale.
+    """
+    factor = 1.0
+    for key in SCALABLE_NUMERIC_ATTRIBUTES:
+        mine_raw = item_attrs.get(key, "").strip()
+        theirs_raw = comp_attrs.get(key, "").strip()
+        if not mine_raw or not theirs_raw:
+            continue
+        mine = parse_quantity(mine_raw)
+        theirs = parse_quantity(theirs_raw)
+        if mine is None or theirs is None or mine.unit != theirs.unit:
+            return None
+        if mine.amount != theirs.amount:
+            factor *= (mine.amount / theirs.amount) ** QUANTITY_SCALE_EXPONENT
+    return factor
+
+
 def apply_guards(
     comps: list[Comp],
     *,
@@ -135,7 +212,8 @@ def apply_guards(
     score_floor: float = 0.0,
     require_price: bool = True,
 ) -> list[Comp]:
-    """Drop comps that are below the score floor or contradict a hard attribute."""
+    """Drop comps below the score floor, with a conflicting hard attribute,
+    or an irreconcilable numeric spec; scale price for a reconcilable one."""
     kept: list[Comp] = []
     for comp in comps:
         if require_price and (comp.price is None or comp.price <= 0):
@@ -144,6 +222,17 @@ def apply_guards(
             continue
         if not attributes_agree(item_attrs, comp.attributes):
             continue
+        factor = quantity_scale_factor(item_attrs, comp.attributes)
+        if factor is None:
+            continue
+        if factor != 1.0 and comp.price is not None:
+            scaled = comp.price * factor
+            comp = comp.model_copy(
+                update={
+                    "price": scaled,
+                    "price_note": f"scaled from ${comp.price:.2f} (x{factor:.2f})",
+                }
+            )
         kept.append(comp)
     return kept
 

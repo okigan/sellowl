@@ -74,6 +74,10 @@ class Comp(BaseModel):
     attributes: dict[str, str] = Field(default_factory=dict)
     description: str = ""
     score: float = 0.0
+    # Set when `price` was scaled from a different capacity than the item's
+    # own (see match.scale_price_for_capacity) — e.g. a 128GB comp's price
+    # scaled down to approximate a 32GB item. Blank when price is as-scraped.
+    price_note: str = ""
     scraped_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     job_id: str = ""
 

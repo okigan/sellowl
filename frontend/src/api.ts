@@ -42,6 +42,7 @@ export interface Comp {
   condition_evidence: string;
   description: string;
   score: number;
+  price_note: string;
 }
 
 export interface Vision {

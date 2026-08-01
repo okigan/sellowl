@@ -24,7 +24,14 @@ function CompRow({ comp }: { comp: Comp }) {
           {comp.venue === "ebay_sold" ? "sold" : "asking"}
         </span>
       </td>
-      <td className="px-2 py-2.5">{money(comp.price)}</td>
+      <td className="px-2 py-2.5">
+        {money(comp.price)}
+        {comp.price_note && (
+          <span className="ml-1 cursor-help text-warn" title={comp.price_note}>
+            *
+          </span>
+        )}
+      </td>
       <td className="px-2 py-2.5">
         <ConditionChip condition={comp.condition} evidence={comp.condition_evidence} />
       </td>
@@ -154,6 +161,12 @@ export function ItemRow({ item, index }: { item: Item; index: number }) {
                     ))}
                   </tbody>
                 </table>
+                {item.comps.some((c) => c.price_note) && (
+                  <p className="pt-2 text-[11px] text-muted/60">
+                    <span className="text-warn">*</span> price adjusted for a different
+                    capacity/spec than this item's — hover for detail.
+                  </p>
+                )}
               </div>
             )}
           </td>

@@ -153,3 +153,15 @@ class TestVisionGraderCaching:
         await g.grade(photo, "vintage bowl")
         await g.grade(photo, "modern vase")
         assert fake.calls == 2
+
+    async def test_prompt_change_invalidates_old_cache_entries(
+        self, grader: tuple[VisionGrader, FakeOpenAI], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Editing PROMPT (e.g. adding an attribute) must not keep serving
+        results shaped by the old prompt for the rest of the cache TTL."""
+        g, fake = grader
+        photo = b"\xff\xd8\xff fake jpeg bytes"
+        await g.grade(photo, "vintage bowl")
+        monkeypatch.setattr("sellowl.vision._PROMPT_VERSION", "a-different-version")
+        await g.grade(photo, "vintage bowl")
+        assert fake.calls == 2

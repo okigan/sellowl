@@ -7,11 +7,14 @@ tests for the code that stops that becoming a price band.
 from __future__ import annotations
 
 from sellowl.match import (
+    Quantity,
     apply_guards,
     attributes_agree,
     build_fallback_queries,
     build_rrf_query,
     condition_matched_prices,
+    parse_quantity,
+    quantity_scale_factor,
     rrf_fuse,
 )
 from sellowl.models import Comp, Condition, Venue
@@ -110,6 +113,69 @@ class TestAttributesAgree:
         used for shipping estimation, not identity."""
         assert attributes_agree({"size_class": "small"}, {"size_class": "large"})
 
+    def test_category_is_not_a_hard_attribute(self) -> None:
+        """Deliberately not gated: two calls on the exact same real product
+        can phrase category differently ("cooling fan" vs. "PC case fan"),
+        and gating on it risks the same mass-rejection regression size_class
+        caused once vision populated both sides for real. Known tradeoff:
+        a same-brand, different-product mismatch (a padlock scored against a
+        USB key because both are "Apricorn Aegis") can still slip through —
+        category is captured for audit, not enforced here."""
+        assert attributes_agree(
+            {"brand": "Apricorn", "category": "USB flash drive"},
+            {"brand": "Apricorn", "category": "padlock"},
+        )
+
+
+class TestParseQuantity:
+    def test_number_and_unit(self) -> None:
+        assert parse_quantity("4GB") == Quantity(4.0, "gb")
+
+    def test_space_between_number_and_unit(self) -> None:
+        assert parse_quantity("64 GB") == Quantity(64.0, "gb")
+
+    def test_hyphenated_pack_count(self) -> None:
+        assert parse_quantity("2-pack") == Quantity(2.0, "pack")
+
+    def test_plural_unit_normalized(self) -> None:
+        assert parse_quantity("3 packs") == Quantity(3.0, "pack")
+
+    def test_not_a_quantity_is_none(self) -> None:
+        assert parse_quantity("black") is None
+        assert parse_quantity("") is None
+
+    def test_zero_is_none(self) -> None:
+        assert parse_quantity("0GB") is None
+
+
+class TestQuantityScaleFactor:
+    def test_no_numeric_attributes_present_is_neutral(self) -> None:
+        assert quantity_scale_factor({"brand": "Apricorn"}, {"brand": "Apricorn"}) == 1.0
+
+    def test_equal_capacity_is_neutral(self) -> None:
+        assert quantity_scale_factor({"capacity": "4GB"}, {"capacity": "4GB"}) == 1.0
+
+    def test_different_capacity_scales_sublinearly(self) -> None:
+        """A 64GB comp priced for a 4GB item: scaled down, but by less than
+        the raw 16x ratio -- bigger capacities cost less per unit."""
+        factor = quantity_scale_factor({"capacity": "4GB"}, {"capacity": "64GB"})
+        assert factor is not None
+        assert 0 < factor < 1.0
+
+    def test_scale_factor_is_the_inverse_in_reverse(self) -> None:
+        """Real hack-night bug this design must avoid: "4GB" is a substring
+        of "64GB", so naive substring tolerance would treat them as equal."""
+        down = quantity_scale_factor({"capacity": "4GB"}, {"capacity": "64GB"})
+        up = quantity_scale_factor({"capacity": "64GB"}, {"capacity": "4GB"})
+        assert down is not None and up is not None
+        assert down < 1.0 < up
+
+    def test_mismatched_units_is_irreconcilable(self) -> None:
+        assert quantity_scale_factor({"capacity": "4GB"}, {"capacity": "2-pack"}) is None
+
+    def test_unparsable_value_is_irreconcilable(self) -> None:
+        assert quantity_scale_factor({"capacity": "4GB"}, {"capacity": "large"}) is None
+
 
 class TestApplyGuards:
     def test_drops_unpriced(self) -> None:
@@ -148,6 +214,34 @@ class TestApplyGuards:
             item_attrs={"brand": "acme"},
         )
         assert [c.external_id for c in kept] == ["good"]
+
+    def test_scales_price_for_a_different_capacity_instead_of_dropping(self) -> None:
+        """The real feature this guards against losing: a 64GB comp is a
+        usable signal for a 4GB item once its price is scaled down, not a
+        different product to throw away."""
+        kept = apply_guards(
+            [comp("a", price=64.0, attrs={"brand": "Apricorn", "capacity": "64GB"})],
+            item_attrs={"brand": "Apricorn", "capacity": "4GB"},
+        )
+        assert len(kept) == 1
+        assert kept[0].price is not None and kept[0].price < 64.0
+        assert "scaled" in kept[0].price_note
+
+    def test_matching_capacity_leaves_price_and_note_untouched(self) -> None:
+        kept = apply_guards(
+            [comp("a", price=20.0, attrs={"capacity": "4GB"})],
+            item_attrs={"capacity": "4GB"},
+        )
+        assert len(kept) == 1
+        assert kept[0].price == 20.0
+        assert kept[0].price_note == ""
+
+    def test_drops_irreconcilable_capacity_units(self) -> None:
+        kept = apply_guards(
+            [comp("a", attrs={"capacity": "2-pack"})],
+            item_attrs={"capacity": "4GB"},
+        )
+        assert kept == []
 
 
 class TestConditionMatchedPrices:

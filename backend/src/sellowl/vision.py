@@ -52,10 +52,20 @@ Return ONLY a JSON object, no prose, with exactly these keys:
   canonical_description  A dense factual description someone would search for:
                          object type, material, style, era, distinguishing
                          features. No marketing language. Max 30 words.
-  attributes             Object with any of: material, brand, era, style,
-                         size_class (one of: small, medium, large, xlarge),
-                         color. Omit keys you cannot determine from the photo.
-                         Never guess a brand.
+  attributes             Object with any of: category, material, brand, era,
+                         style, size_class (one of: small, medium, large,
+                         xlarge), color, capacity. Omit keys you cannot
+                         determine from the photo. Never guess a brand.
+                         category  What KIND of object this is, 1-3 plain
+                         words (e.g. "USB flash drive", "padlock", "case
+                         fan", "radiator"). Keep it short and generic, not a
+                         precise model description.
+                         capacity  A storage/volume/quantity spec printed on
+                         the item or its packaging (e.g. "4GB", "64GB",
+                         "2-pack", "500ml"). Only from text you can actually
+                         read — never estimate or guess this one. Two
+                         otherwise-identical items with different capacity
+                         are a different product, not a variant.
   condition              Exactly one of: "rough", "usable", "clean".
                          rough  = damaged, missing parts, heavy wear, parts-only
                          usable = works, honest wear, cosmetic flaws visible
@@ -70,6 +80,11 @@ Return ONLY a JSON object, no prose, with exactly these keys:
 The listing title is: {title}
 Treat the title as a hint only; trust the photo where they disagree.\
 """
+
+# Cached results are keyed in part on this: editing the prompt (e.g. adding an
+# attribute) must invalidate old cache entries automatically rather than
+# silently serving stale shapes from before the change for up to the TTL.
+_PROMPT_VERSION = hashlib.sha256(PROMPT.encode()).hexdigest()[:12]
 
 
 def _media_type(data: bytes) -> MediaType:
@@ -181,7 +196,7 @@ class VisionGrader:
             return _fallback(title)
 
         digest = hashlib.sha256(photo).hexdigest()
-        key = cache_key("vision_grade", self._provider, self._model, digest, title)
+        key = cache_key("vision_grade", _PROMPT_VERSION, self._provider, self._model, digest, title)
         if self._cache_ttl_s > 0:
             cached = cache_get(key, ttl_seconds=self._cache_ttl_s, cache_dir=VISION_CACHE_DIR)
             if cached is not None:
