@@ -25,6 +25,13 @@ export interface Verdict {
   current_net: number | null;
   opportunity_usd: number | null;
   shipping_estimate: number | null;
+  // Which bucket the band actually came from: "model+condition" (narrowest),
+  // "condition" (blended across models), or "all" (blended across
+  // conditions too). The reason text already discloses "all" in prose; this
+  // is here for anything that wants to key off it directly.
+  sold_band_tier: string | null;
+  local_band_tier: string | null;
+  local_ask_discount: number | null;
 }
 
 export interface Comp {

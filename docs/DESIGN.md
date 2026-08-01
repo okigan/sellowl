@@ -287,16 +287,22 @@ for. The guards, in the order a comp actually passes through them
 
 **`model`** — the product's specific line or generation within a brand (an
 "Aegis Secure Key" vs. an "Aegis Secure Key 3NX" — plausibly different base
-prices even at the same capacity) — is now explicitly prompted for, the same
-way `category` is, and captured on `Comp.attributes`/vision results for
-audit. It is **deliberately not** in `HARD_ATTRIBUTES` yet, for the same
-reason `category` isn't: model-name text is free-form and read off
-packaging inconsistently between two separate vision calls ("Aegis Secure
-Key 3" vs. "Aegis Secure Key 3z" for the same physical line), and gating on
-exact or even substring agreement risks the same mass-rejection failure
-mode `size_class` caused. Worth revisiting once there's a corpus of real
-`model` values to see how consistent the vocabulary actually is in
-practice — until then, an unhelpfully-precise "reject on any model
+prices even at the same capacity) — is explicitly prompted for, the same way
+`category` is. Unlike `category`, it isn't purely audit-only any more:
+`match.matched_prices` *prefers* a same-model bucket for price aggregation
+when there's enough data (see § Rethinking venue, condition, and model
+pricing), falling back safely when there isn't. It is still **deliberately
+not** in `HARD_ATTRIBUTES` — not used in `apply_guards` to reject a comp
+outright — for the same reason `category` isn't: model-name text is
+free-form and read off packaging inconsistently between two separate vision
+calls ("Aegis Secure Key 3" vs. "Aegis Secure Key 3z" for the same physical
+line), and a hard reject on exact or even substring disagreement risks the
+same mass-rejection failure mode `size_class` caused. The bucketing
+preference is the safer middle ground: use it when it narrows the band
+without starving it, never use it to throw a comp away. Worth revisiting
+once there's a corpus of real `model` values to see how consistent the
+vocabulary actually is in practice — until then, an unhelpfully-precise
+"reject on any model
 mismatch" would trade the known problem (a padlock scoring against a USB
 key on brand alone) for a worse one (rejecting genuine matches over
 packaging-text noise).
@@ -470,6 +476,84 @@ actually true; claiming "local asks run higher" in the fee-driven case
 would be false and checkable-as-wrong against the local band shown right
 next to it.
 
+## Rethinking venue, condition, and model pricing
+
+The sections above describe the system as it stands. This section is the
+opposite direction: three places where the *original* approach was too
+naive once looked at critically, and what changed as a result. Keep this
+section around after the code catches up further — it's where the next
+round of naive assumptions should get the same treatment.
+
+### 1. A Facebook ask isn't an eBay sold price, and the math was treating them as equal
+
+The original design (see § Data sources, § Recommendation above) already
+knew FB comps are *asking* prices and eBay comps are *sold* — the "Known
+limitations" list has said so since the first draft. But knowing it and
+*pricing around it* are different things: `local_net` was computed straight
+from `local_band.p50` with zero adjustment, as if every local buyer pays
+the exact number in the listing. They don't — negotiation, no-shows, and
+lowball offers are the entire texture of in-person secondhand sales, and a
+real local sale routinely closes below ask. Comparing that optimistic
+number against eBay's real transacted median as if they were the same kind
+of number was an apples-to-oranges comparison sitting at the center of the
+one recommendation this app exists to make.
+
+**Change:** `FeeConfig.fb_ask_discount` (default `0.85`, configurable via
+`FB_ASK_DISCOUNT`) haircuts the local asking price before it becomes
+`local_net` (`pricing.net_proceeds_local`). `target` (what to actually list
+at) still shows the *undiscounted* asking-price band — the discount only
+affects the venue-comparison math, not the actionable listing price, the
+same way eBay's sold median isn't discounted for target purposes either
+(it's already a real transacted number). The reason text names the
+discount explicitly whenever it's active: "...sell locally, in person, for
+more, after an estimated 15% negotiation discount." **This number is a
+starting assumption, not a measurement** — no real paired
+asking-vs-actually-closed local sales data has calibrated it. A natural
+next step, if this app collected outcomes over time, would be replacing it
+with something learned from actual local sales instead of an eyeballed
+constant.
+
+### 2. Model/feature-line differences were captured and then ignored
+
+`category` and `model` attributes exist on every graded item and comp (see
+§ Vision), explicitly *not* hard-gated, for good reason — LLM-read
+packaging text is inconsistent between two separate calls, and gating on it
+exactly reproduced the mass-rejection failure `size_class` caused (see
+§ Matching). But "not a hard gate" had, until now, meant "not used in
+pricing at all" — an "Aegis Secure Key" and an "Aegis Secure Key 3NX" comp
+counted identically toward the same price band, even though they're
+plausibly different products at different price points within the same
+brand and category. Capturing a dimension for audit and then never letting
+it influence the actual number isn't "accounting for" it, just labeling it.
+
+**Change:** `match.matched_prices` (superseding the older
+`condition_matched_prices`, kept as a thin backward-compatible wrapper)
+tries a **narrower bucket first, falls back only when the data doesn't
+support it**: same condition AND same model, then same condition alone,
+then every priced comp. This is the identical shape of guard already proven
+safe for condition-bucketing (see § Aggregation) — a *preference* for
+specificity that degrades gracefully, not a filter that silently discards
+comps when the narrower signal doesn't check out. The tier actually used
+(`"model+condition"` / `"condition"` / `"all"`) is exposed on `Verdict` and
+disclosed in the reason text when it's the widest one, so a "clean"-graded
+item's price band that's secretly blended across every condition (because
+too few same-condition comps existed) doesn't read as more precise than it
+is.
+
+### 3. Communicating precision, not just a number
+
+Related to both of the above: the app was always happy to show *a* band,
+never how much to trust it. Two people asking "why does this say $50?" for
+different reasons — one item priced from 8 tightly-matched same-model
+comps, another from 5 comps blended across every condition because nothing
+narrower existed — got the identical-looking output. The fixes above (the
+discount note, the blend disclosure, `current_net` for reconciling
+`opportunity_usd`, `target` tracking the recommended venue instead of
+always the eBay band) are all instances of the same underlying principle:
+**a number without its provenance is a number nobody can evaluate**, and
+this app's entire premise (per § Guarding against semantic drift's "always
+show the comps") is that provenance is not optional decoration.
+
 ## Tier 3 — dry run only
 
 Given an eBay seller API key, render the exact revise-price call that *would*
@@ -550,6 +634,9 @@ COMP_CONCURRENCY=3                # keep low: Apify account-wide memory cap
 MIN_COMPS=5
 RERANK_TOP_K=8
 EBAY_FVF_RATE=0.1325
+EBAY_FIXED_FEE=0.40
+FB_LOCAL_RATE=0.0
+FB_ASK_DISCOUNT=0.85              # asking price -> expected local net; see § Rethinking...
 ```
 
 Actor slugs are config, not constants — swapping a failed actor at 7pm must be
@@ -561,8 +648,11 @@ silently misbehaved before landing on the current ones).
 
 Say these out loud rather than being caught by them:
 
-- FB comps are *asking* prices; only eBay comps are *sold*. The recommendation
-  weights them differently and the UI labels which is which.
+- FB comps are *asking* prices; only eBay comps are *sold*. `fb_ask_discount`
+  (see § Rethinking venue, condition, and model pricing) haircuts the ask
+  toward an expected close price, but that discount is an assumption, not a
+  measurement — there's no real paired asking-vs-actually-closed data behind
+  the `0.85` default.
 - No listing dates from FB, so no staleness signal on local comps.
 - City-level location only; "local" means the metro, not a radius.
 - Condition grading from a single photo misses interior/back/underside damage.
@@ -571,8 +661,10 @@ Say these out loud rather than being caught by them:
 - `QUANTITY_SCALE_EXPONENT` (capacity/spec price scaling) is an uncalibrated
   heuristic — validated against one real product line's rough shape, not
   fit against real paired same-product-different-spec sales data.
-- Product model/generation within a brand isn't a recognized attribute —
-  see § What isn't attribute-gated yet.
+- Model/feature-line preference in bucketing (`match.matched_prices`) tries
+  the narrower tier and falls back safely, but is still a *substring-match*
+  preference over free-form LLM text, not a verified product-identity
+  match — see § What isn't attribute-gated yet for why it isn't a hard gate.
 - Retrieval is not scoped to one job's data; `sellowl-comps` accumulates
   across every job that has ever run. Harmless for correctness (comps
   upsert by `doc_id`, not duplicate) but means the index grows unbounded

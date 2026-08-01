@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     ebay_fvf_rate: float = 0.1325
     ebay_fixed_fee: float = 0.40
     fb_local_rate: float = 0.0
+    # A Facebook comp is an asking price, not a sold one; this haircuts it
+    # before it's treated as achievable proceeds. Uncalibrated, like the
+    # rates above.
+    fb_ask_discount: float = 0.85
 
     # --- elastic ---------------------------------------------------------
     index_prefix: str = "sellowl"

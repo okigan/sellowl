@@ -115,6 +115,18 @@ class Verdict(BaseModel):
     current_net: float | None = None
     opportunity_usd: float | None = None
     shipping_estimate: float | None = None
+    # Which bucket the sold/local band actually came from: "model+condition"
+    # (narrowest, most specific), "condition" (blended across models within
+    # the item's condition grade), or "all" (blended across conditions too —
+    # not enough same-condition comps to isolate). See match.matched_prices.
+    # Exposed so a "clean"-condition item's band that's secretly blended
+    # across rough/usable/clean comps doesn't read as more precise than it is.
+    sold_band_tier: str | None = None
+    local_band_tier: str | None = None
+    # The haircut actually applied to local_band's asking-price median before
+    # it became local_net (see pricing.FeeConfig.fb_ask_discount) -- None
+    # when local_net itself is None (no local comps, or distrusted).
+    local_ask_discount: float | None = None
 
 
 class Item(BaseModel):

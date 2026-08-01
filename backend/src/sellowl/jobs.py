@@ -16,7 +16,7 @@ import structlog
 from .config import Settings
 from .index import CompStore, ElasticCompStore, MemoryCompStore
 from .logging import get_logger
-from .match import apply_guards, capacity_from_text, condition_matched_prices
+from .match import apply_guards, capacity_from_text, matched_prices
 from .models import Comp, Condition, Item, Job, JobStage, JobStatus, Venue, VisionResult
 from .pricing import FeeConfig, build_verdict
 from .sources import (
@@ -71,6 +71,7 @@ class Pipeline:
             ebay_fvf_rate=settings.ebay_fvf_rate,
             ebay_fixed_fee=settings.ebay_fixed_fee,
             fb_local_rate=settings.fb_local_rate,
+            fb_ask_discount=settings.fb_ask_discount,
         )
 
     async def run(self, job: Job) -> None:
@@ -247,18 +248,29 @@ class Pipeline:
 
             sold = [c for c in item.comps if c.venue is Venue.EBAY_SOLD]
             local = [c for c in item.comps if c.venue is Venue.FB_LOCAL]
+            model_value = vision.attributes.get("model", "")
+            sold_matched = matched_prices(
+                sold,
+                condition_value=vision.condition.value,
+                model_value=model_value,
+                min_comps=self._s.min_comps,
+            )
+            local_matched = matched_prices(
+                local,
+                condition_value=vision.condition.value,
+                model_value=model_value,
+                min_comps=self._s.min_comps,
+            )
             item.verdict = build_verdict(
                 ask_price=item.ask_price,
-                sold_prices=condition_matched_prices(
-                    sold, vision.condition.value, self._s.min_comps
-                ),
-                local_prices=condition_matched_prices(
-                    local, vision.condition.value, self._s.min_comps
-                ),
+                sold_prices=sold_matched.prices,
+                local_prices=local_matched.prices,
                 attributes=vision.attributes,
                 condition=vision.condition,
                 fees=self._fees,
                 min_comps=self._s.min_comps,
+                sold_tier=sold_matched.tier,
+                local_tier=local_matched.tier,
             )
             job.stage.done += 1
 

@@ -179,6 +179,16 @@ def rrf_fuse(rankings: list[list[str]], rank_constant: int = RANK_CONSTANT) -> d
     return scores
 
 
+def _value_agrees(mine: str, theirs: str) -> bool:
+    """True if two free-text attribute values plausibly describe the same
+    thing: neither empty, and either is a substring of the other. Shared by
+    the hard-attribute conflict check and the model-preference bucketing
+    below -- the same phrasing-variance problem shows up in both places.
+    """
+    mine, theirs = mine.strip().lower(), theirs.strip().lower()
+    return bool(mine) and bool(theirs) and (mine in theirs or theirs in mine)
+
+
 def attributes_agree(
     item_attrs: dict[str, str],
     comp_attrs: dict[str, str],
@@ -194,9 +204,9 @@ def attributes_agree(
     almost every genuine match once both sides had real attributes.
     """
     for key in hard_keys:
-        mine = item_attrs.get(key, "").strip().lower()
-        theirs = comp_attrs.get(key, "").strip().lower()
-        if mine and theirs and mine not in theirs and theirs not in mine:
+        mine = item_attrs.get(key, "")
+        theirs = comp_attrs.get(key, "")
+        if mine.strip() and theirs.strip() and not _value_agrees(mine, theirs):
             return False
     return True
 
@@ -259,25 +269,79 @@ def apply_guards(
     return kept
 
 
+@dataclass(frozen=True)
+class MatchedPrices:
+    """Prices feeding a price band, and which bucket they actually came from.
+
+    The tier matters for honest communication: a "clean"-condition item's
+    band silently blended across rough/usable/clean comps (because too few
+    shared its exact condition) is a materially weaker claim than a band
+    built from same-condition, same-model comps, and a user comparing their
+    own ask against it deserves to know which one they're looking at.
+    """
+
+    prices: list[float]
+    tier: str  # "model+condition" | "condition" | "all"
+
+
+def matched_prices(
+    comps: list[Comp],
+    *,
+    condition_value: str = "",
+    model_value: str = "",
+    min_comps: int = 1,
+) -> MatchedPrices:
+    """Prices of comps in the narrowest trustworthy bucket.
+
+    Tries, in order, only as narrow as the data actually supports:
+
+    1. Same condition AND same model/feature-line ("model+condition") --
+       the most specific comparison available. Model text is free-form and
+       inconsistent between two vision calls ("Aegis Secure Key 3" vs. "...
+       3NX"), which is why this is a *preference* tried first, not a hard
+       filter applied everywhere (see HARD_ATTRIBUTES's docstring for why
+       exact-match gating on this class of attribute backfires) — the model
+       dimension is used to narrow the band when there's enough data to do
+       so safely, not to silently reject comps that don't match it.
+    2. Same condition only ("condition") -- the previous behavior.
+    3. Every priced comp regardless of condition or model ("all") -- a
+       wider, blended band beats no band at all.
+
+    Each tier is used only when it has at least `min_comps` prices; a
+    narrower bucket that's too small to trust falls through to the next.
+    Before condition grading had real per-comp data (vision off), tier 2
+    only ever differed from tier 3 on a literal zero comps; with real
+    grades, a same-condition bucket can legitimately land below the quoting
+    threshold even with plenty of comps overall, and narrowing to too few of
+    them was producing "insufficient data" that a blended band would have
+    avoided. The model tier is the same shape of problem one level narrower.
+    """
+    priced = [c for c in comps if c.price is not None and c.price > 0]
+    has_condition = bool(condition_value) and condition_value != "unknown"
+    condition_bucket = (
+        [c for c in priced if c.condition.value == condition_value] if has_condition else []
+    )
+
+    if model_value and condition_bucket:
+        narrow = [
+            c for c in condition_bucket if _value_agrees(model_value, c.attributes.get("model", ""))
+        ]
+        if len(narrow) >= min_comps:
+            return MatchedPrices(
+                [c.price for c in narrow if c.price is not None], "model+condition"
+            )
+
+    if has_condition and len(condition_bucket) >= min_comps:
+        return MatchedPrices(
+            [c.price for c in condition_bucket if c.price is not None], "condition"
+        )
+
+    return MatchedPrices([c.price for c in priced if c.price is not None], "all")
+
+
 def condition_matched_prices(
     comps: list[Comp], condition_value: str, min_comps: int = 1
 ) -> list[float]:
-    """Prices of comps in the same condition bucket.
-
-    Falls back to every priced comp when the item's own grade is unknown, or
-    when fewer than `min_comps` comps share it -- a wider, blended band beats
-    no band at all, and the UI says which happened. Before condition grading
-    had real data on both sides (vision on), this fallback only ever fired on
-    a literal zero; with real per-comp grades, an exact-condition bucket can
-    legitimately land below the quoting threshold even though plenty of
-    comps exist overall, and narrowing to too few of them was producing
-    "insufficient data" that a blended band would have avoided.
-    """
-    priced = [c for c in comps if c.price is not None and c.price > 0]
-    if condition_value and condition_value != "unknown":
-        same = [c.price for c in priced if c.condition.value == condition_value]
-        if len(same) >= min_comps:
-            # `priced` already guarantees price is not None; filtered again so
-            # mypy can narrow `list[float | None]` to `list[float]`.
-            return [p for p in same if p is not None]
-    return [c.price for c in priced if c.price is not None]
+    """Back-compat shim over `matched_prices` for callers that don't need
+    to know which bucket tier was actually used."""
+    return matched_prices(comps, condition_value=condition_value, min_comps=min_comps).prices

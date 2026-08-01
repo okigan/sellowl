@@ -30,6 +30,15 @@ class FeeConfig:
     ebay_fvf_rate: float = 0.1325
     ebay_fixed_fee: float = 0.40
     fb_local_rate: float = 0.0
+    # eBay sold comps are real transacted prices; Facebook comps are *asking*
+    # prices, and a local sale rarely closes at the exact number listed --
+    # negotiation, no-shows, and lowball offers all push the real outcome
+    # below the ask. Treating local_band's median as guaranteed proceeds was
+    # comparing a real number (what eBay actually paid) against an optimistic
+    # one (what a local seller merely hopes for) as if they were the same
+    # kind of number. Uncalibrated, like the other rates here — a starting
+    # assumption, not measured against real local sales.
+    fb_ask_discount: float = 0.85
 
 
 def shipping_estimate(attributes: dict[str, str]) -> float:
@@ -60,9 +69,15 @@ def net_proceeds_ebay(price: float, shipping: float, fees: FeeConfig) -> float:
     return price * (1.0 - fees.ebay_fvf_rate) - fees.ebay_fixed_fee - shipping
 
 
-def net_proceeds_local(price: float, fees: FeeConfig) -> float:
-    """In-person local sale: no shipping, and no fee by default."""
-    return price * (1.0 - fees.fb_local_rate)
+def net_proceeds_local(asking_price: float, fees: FeeConfig) -> float:
+    """Expected net from an in-person local sale, from the *asking* price.
+
+    No shipping, no platform fee by default -- but `fb_ask_discount` haircuts
+    the asking price itself first, because unlike an eBay sold comp (a real
+    transacted price), a Facebook comp is only ever what someone *asked*
+    for, and real local sales close below ask more often than not.
+    """
+    return asking_price * fees.fb_ask_discount * (1.0 - fees.fb_local_rate)
 
 
 # A local ask band this many times "spikier" than the sold band (whose own
@@ -110,12 +125,14 @@ def build_verdict(
     condition: Condition,
     fees: FeeConfig,
     min_comps: int,
+    sold_tier: str = "condition",
+    local_tier: str = "condition",
 ) -> Verdict:
     """Turn matched comp prices into a recommendation.
 
-    `sold_prices` should already be filtered to the item's condition bucket by
-    the caller; this function does not re-filter, it only reports the condition
-    it was told about.
+    `sold_prices`/`local_prices` should already be filtered by the caller
+    (see `match.matched_prices`); this function does not re-filter, it only
+    reports the condition and bucket tier it was told about.
     """
     sold_band = percentiles(sold_prices)
     local_band = percentiles(local_prices)
@@ -152,7 +169,7 @@ def build_verdict(
         current_net = net_proceeds_ebay(ask_price, shipping, fees)
         opportunity = best_net - current_net
 
-    reason = _reason(kind, condition, sold_band, local_band, venue)
+    reason = _reason(kind, condition, sold_band, local_band, venue, sold_tier, fees)
     if local_band is not None and not local_trusted:
         reason += " (Local asks looked scattered/mismatched — ignored for pricing.)"
 
@@ -166,6 +183,9 @@ def build_verdict(
         reason=reason,
         sold_band=sold_band,
         local_band=local_band,
+        sold_band_tier=sold_tier,
+        local_band_tier=local_tier if local_band is not None else None,
+        local_ask_discount=fees.fb_ask_discount if local_net is not None else None,
         target_low=target_band.p25,
         target_high=target_band.p75,
         target=target_band.p50,
@@ -184,6 +204,8 @@ def _reason(
     sold_band: PriceBand,
     local_band: PriceBand | None,
     venue: Venue,
+    sold_tier: str,
+    fees: FeeConfig,
 ) -> str:
     """One sentence that never contradicts itself.
 
@@ -207,24 +229,38 @@ def _reason(
             # false — the median is right there in local_band for anyone to
             # check against this sentence.
             why = "Selling locally skips eBay's fee and shipping"
-        local_premium = f" {why} though — sell locally, in person, for more."
+        discount_note = (
+            f", after an estimated {(1 - fees.fb_ask_discount) * 100:.0f}% negotiation discount"
+            if fees.fb_ask_discount < 1.0
+            else ""
+        )
+        local_premium = f" {why} though — sell locally, in person, for more{discount_note}."
+    # A "clean"-condition item's band that's actually blended across every
+    # condition (too few same-condition comps to isolate) is a materially
+    # weaker claim than one built from same-condition comps only, and that
+    # difference must be visible here, not just in Verdict.sold_band_tier.
+    blend_note = (
+        " (This band blends every condition — not enough same-condition comps to isolate one.)"
+        if sold_tier == "all" and grade != "unknown"
+        else ""
+    )
     match kind:
         case VerdictKind.UNDERPRICED:
             base = (
                 f"Below the {grade} band (p25 ${sold_band.p25:,.0f}) on eBay. "
                 f"Median sold there is ${sold_band.p50:,.0f} across {sold_band.n} comps."
             )
-            return base + (local_premium or " Sell on eBay.")
+            return base + (local_premium or " Sell on eBay.") + blend_note
         case VerdictKind.OVERPRICED:
             base = f"Above the {grade} band (p75 ${sold_band.p75:,.0f}) on eBay."
             if local_wins:
-                return base + " eBay buyers won't pay this." + local_premium
-            return base + f" Reduce toward ${sold_band.p50:,.0f} to actually move it."
+                return base + " eBay buyers won't pay this." + local_premium + blend_note
+            return base + f" Reduce toward ${sold_band.p50:,.0f} to actually move it." + blend_note
         case VerdictKind.FAIR:
             base = (
                 f"In line with what this sells for on eBay "
                 f"(${sold_band.p25:,.0f}–${sold_band.p75:,.0f})."
             )
-            return base + (local_premium or " Sell on eBay.")
+            return base + (local_premium or " Sell on eBay.") + blend_note
         case VerdictKind.INSUFFICIENT_DATA:
             return "Not enough matched comps to quote a band."

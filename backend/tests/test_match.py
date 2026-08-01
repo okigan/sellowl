@@ -14,6 +14,7 @@ from sellowl.match import (
     build_rrf_query,
     capacity_from_text,
     condition_matched_prices,
+    matched_prices,
     parse_quantity,
     quantity_scale_factor,
     rrf_fuse,
@@ -321,6 +322,80 @@ class TestConditionMatchedPrices:
             comp("clean1", price=300.0, condition=Condition.CLEAN),
         ]
         assert sorted(condition_matched_prices(comps, "usable", min_comps=2)) == [200.0, 210.0]
+
+
+class TestMatchedPrices:
+    """The model-aware version: prefers same-model+same-condition, then
+    same-condition, then everything -- and reports which tier it actually
+    used, so the caller can tell the user their band isn't blended across
+    conditions/models when it isn't, and *is* when it is.
+    """
+
+    def test_prefers_model_and_condition_when_enough_data(self) -> None:
+        comps = [
+            comp(
+                "m1", price=50.0, condition=Condition.USABLE, attrs={"model": "Aegis Secure Key 3"}
+            ),
+            comp(
+                "m2", price=55.0, condition=Condition.USABLE, attrs={"model": "Aegis Secure Key 3"}
+            ),
+            comp(
+                "other-model",
+                price=200.0,
+                condition=Condition.USABLE,
+                attrs={"model": "Aegis Padlock"},
+            ),
+        ]
+        result = matched_prices(
+            comps, condition_value="usable", model_value="Aegis Secure Key 3", min_comps=2
+        )
+        assert result.tier == "model+condition"
+        assert sorted(result.prices) == [50.0, 55.0]
+
+    def test_falls_back_to_condition_when_model_bucket_too_small(self) -> None:
+        comps = [
+            comp(
+                "m1", price=50.0, condition=Condition.USABLE, attrs={"model": "Aegis Secure Key 3"}
+            ),
+            comp(
+                "c1", price=60.0, condition=Condition.USABLE, attrs={"model": "Aegis Secure Key 4"}
+            ),
+            comp("c2", price=65.0, condition=Condition.USABLE, attrs={}),
+        ]
+        result = matched_prices(
+            comps, condition_value="usable", model_value="Aegis Secure Key 3", min_comps=2
+        )
+        assert result.tier == "condition"
+        assert sorted(result.prices) == [50.0, 60.0, 65.0]
+
+    def test_falls_back_to_all_when_condition_bucket_too_small(self) -> None:
+        comps = [
+            comp("a", price=10.0, condition=Condition.CLEAN),
+            comp("b", price=20.0, condition=Condition.ROUGH),
+        ]
+        result = matched_prices(comps, condition_value="usable", min_comps=1)
+        assert result.tier == "all"
+        assert sorted(result.prices) == [10.0, 20.0]
+
+    def test_no_model_value_skips_the_narrow_tier(self) -> None:
+        comps = [
+            comp("a", price=10.0, condition=Condition.USABLE, attrs={"model": "X"}),
+            comp("b", price=20.0, condition=Condition.USABLE, attrs={"model": "Y"}),
+        ]
+        result = matched_prices(comps, condition_value="usable", min_comps=1)
+        assert result.tier == "condition"
+
+    def test_condition_matched_prices_shim_matches_the_condition_tier(self) -> None:
+        """Back-compat: the plain function returns exactly matched_prices's
+        .prices, without the caller needing to know about tiers at all."""
+        comps = [
+            comp("a", price=10.0, condition=Condition.USABLE),
+            comp("b", price=20.0, condition=Condition.CLEAN),
+        ]
+        assert (
+            condition_matched_prices(comps, "usable", min_comps=1)
+            == matched_prices(comps, condition_value="usable", min_comps=1).prices
+        )
 
 
 class TestQueryShapes:

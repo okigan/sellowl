@@ -19,7 +19,10 @@ from sellowl.pricing import (
     shipping_estimate,
 )
 
-FEES = FeeConfig(ebay_fvf_rate=0.1325, ebay_fixed_fee=0.40, fb_local_rate=0.0)
+# fb_ask_discount pinned to 1.0 (no haircut) so every existing test below
+# keeps testing what it was written to test -- the discount itself has its
+# own dedicated tests in TestFbAskDiscount / TestNetProceeds.
+FEES = FeeConfig(ebay_fvf_rate=0.1325, ebay_fixed_fee=0.40, fb_local_rate=0.0, fb_ask_discount=1.0)
 
 
 class TestPercentiles:
@@ -84,7 +87,7 @@ class TestNetProceeds:
         assert net_proceeds_local(100.0, FEES) == pytest.approx(100.0)
 
     def test_local_honours_a_nonzero_rate(self) -> None:
-        fees = FeeConfig(fb_local_rate=0.05)
+        fees = FeeConfig(fb_local_rate=0.05, fb_ask_discount=1.0)
         assert net_proceeds_local(100.0, fees) == pytest.approx(95.0)
 
     def test_shipping_reduces_net(self) -> None:
@@ -92,6 +95,26 @@ class TestNetProceeds:
 
     def test_ebay_always_nets_less_than_local_at_equal_price(self) -> None:
         assert net_proceeds_ebay(200.0, 20.0, FEES) < net_proceeds_local(200.0, FEES)
+
+
+class TestFbAskDiscount:
+    """A Facebook comp is only ever an *asking* price -- unlike an eBay sold
+    comp (a real transacted price), it isn't what anyone actually paid.
+    fb_ask_discount haircuts it before it's treated as achievable proceeds.
+    """
+
+    def test_default_discount_reduces_local_net(self) -> None:
+        fees = FeeConfig(fb_local_rate=0.0)  # fb_ask_discount defaults to 0.85
+        assert net_proceeds_local(100.0, fees) == pytest.approx(85.0)
+
+    def test_discount_and_platform_rate_compound(self) -> None:
+        fees = FeeConfig(fb_local_rate=0.05, fb_ask_discount=0.85)
+        # 100 * 0.85 (haircut) * 0.95 (platform rate)
+        assert net_proceeds_local(100.0, fees) == pytest.approx(80.75)
+
+    def test_no_discount_is_a_no_op(self) -> None:
+        fees = FeeConfig(fb_ask_discount=1.0)
+        assert net_proceeds_local(100.0, fees) == pytest.approx(100.0)
 
 
 class TestShippingEstimate:
@@ -535,6 +558,84 @@ class TestBuildVerdict:
             min_comps=5,
         )
         assert "clean" in verdict.reason
+
+
+class TestBuildVerdictDiscountAndBlending:
+    """Two rethought pieces, exercised through the actual verdict rather than
+    the pure helper functions alone: the fb_ask_discount haircut, and
+    disclosure when a band is blended across every condition."""
+
+    def test_local_ask_discount_is_exposed_and_applied(self) -> None:
+        fees = FeeConfig(ebay_fvf_rate=0.1325, ebay_fixed_fee=0.40, fb_ask_discount=0.5)
+        verdict = build_verdict(
+            ask_price=100.0,
+            sold_prices=[200, 205, 210, 215, 220],
+            local_prices=[600, 650, 700],  # high enough that local still wins post-haircut
+            attributes={"size_class": "large"},
+            condition=Condition.USABLE,
+            fees=fees,
+            min_comps=5,
+        )
+        assert verdict.recommended_venue is not None
+        assert verdict.local_band is not None
+        # net_proceeds_local applies the 0.5 haircut before the (0%) platform rate.
+        assert verdict.local_net == pytest.approx(verdict.local_band.p50 * 0.5)
+        assert verdict.local_ask_discount == pytest.approx(0.5)
+        assert "negotiation discount" in verdict.reason
+
+    def test_no_discount_note_when_discount_is_1(self) -> None:
+        verdict = build_verdict(
+            ask_price=100.0,
+            sold_prices=[200, 205, 210, 215, 220],
+            local_prices=[195, 200, 205],
+            attributes={"size_class": "large"},
+            condition=Condition.USABLE,
+            fees=FEES,  # fb_ask_discount=1.0
+            min_comps=5,
+        )
+        assert "negotiation discount" not in verdict.reason
+        assert verdict.local_ask_discount == pytest.approx(1.0)
+
+    def test_discount_is_none_when_local_net_is_none(self) -> None:
+        verdict = build_verdict(
+            ask_price=100.0,
+            sold_prices=[200, 205, 210, 215, 220],
+            local_prices=[],
+            attributes={},
+            condition=Condition.USABLE,
+            fees=FEES,
+            min_comps=5,
+        )
+        assert verdict.local_net is None
+        assert verdict.local_ask_discount is None
+
+    def test_blended_sold_band_is_disclosed_in_the_reason(self) -> None:
+        verdict = build_verdict(
+            ask_price=100.0,
+            sold_prices=[200, 205, 210, 215, 220],
+            local_prices=[],
+            attributes={},
+            condition=Condition.USABLE,
+            fees=FEES,
+            min_comps=5,
+            sold_tier="all",
+        )
+        assert verdict.sold_band_tier == "all"
+        assert "blends every condition" in verdict.reason
+
+    def test_condition_tier_is_not_disclosed_as_blended(self) -> None:
+        verdict = build_verdict(
+            ask_price=100.0,
+            sold_prices=[200, 205, 210, 215, 220],
+            local_prices=[],
+            attributes={},
+            condition=Condition.USABLE,
+            fees=FEES,
+            min_comps=5,
+            sold_tier="condition",
+        )
+        assert verdict.sold_band_tier == "condition"
+        assert "blends every condition" not in verdict.reason
 
 
 class TestVerdictReconciliation:
