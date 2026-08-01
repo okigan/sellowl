@@ -333,7 +333,12 @@ class TestBuildVerdict:
             fees=FEES,
             min_comps=5,
         )
-        assert verdict.reason.endswith("Sell locally, in person.")
+        assert verdict.reason.endswith("sell locally, in person, for more.")
+        # Local median (200) is actually a bit *below* eBay's (210) here --
+        # local wins on avoided fees/shipping, not a higher local price, so
+        # the message must not claim "local asks run higher".
+        assert "skips eBay's fee and shipping" in verdict.reason
+        assert "Local asks run higher" not in verdict.reason
 
     def test_reason_names_ebay_when_ebay_wins(self) -> None:
         verdict = build_verdict(
@@ -399,7 +404,55 @@ class TestBuildVerdict:
         assert verdict.recommended_venue.value == "fb_local"
         assert verdict.opportunity_usd is not None and verdict.opportunity_usd > 0
         assert "Reduce" not in verdict.reason
-        assert "Sell locally, in person instead" in verdict.reason
+        assert "Local asks run higher" in verdict.reason
+        assert verdict.reason.endswith("sell locally, in person, for more.")
+
+    def test_fair_but_local_wins_explains_the_opportunity(self) -> None:
+        """Real user-reported confusion: "fair" (vs. eBay sold comps) read as
+        contradictory next to a large opportunity and "sell local" — the
+        message must connect the two in one sentence instead of letting them
+        look like they disagree.
+        """
+        verdict = build_verdict(
+            ask_price=18.0,
+            sold_prices=[7, 10, 13, 17, 18, 19, 19, 47],
+            local_prices=[45, 50, 55, 60, 65, 70, 75, 80],
+            attributes={},
+            condition=Condition.CLEAN,
+            fees=FEES,
+            min_comps=5,
+        )
+        assert verdict.kind is VerdictKind.FAIR
+        assert verdict.recommended_venue is not None
+        assert verdict.recommended_venue.value == "fb_local"
+        assert verdict.opportunity_usd is not None and verdict.opportunity_usd > 0
+        assert "In line with what this sells for on eBay" in verdict.reason
+        assert "Local asks run higher" in verdict.reason
+        assert verdict.reason.endswith("sell locally, in person, for more.")
+
+    def test_local_wins_on_fees_not_price_says_so_accurately(self) -> None:
+        """Real bug caught live: local can win purely because it skips eBay's
+        fee and shipping, even when the local asking price is *lower* than
+        eBay's own median. Claiming "local asks run higher" in that case
+        would be false and checkable-as-wrong against the local band shown
+        right next to it.
+        """
+        verdict = build_verdict(
+            ask_price=8.0,
+            sold_prices=[6, 6, 7, 7, 8, 17],
+            local_prices=[5, 5, 5, 20],
+            attributes={"size_class": "small"},
+            condition=Condition.UNKNOWN,
+            fees=FEES,
+            min_comps=5,
+        )
+        assert verdict.local_band is not None
+        assert verdict.sold_band is not None
+        assert verdict.local_band.p50 < verdict.sold_band.p50
+        assert verdict.recommended_venue is not None
+        assert verdict.recommended_venue.value == "fb_local"
+        assert "Local asks run higher" not in verdict.reason
+        assert "skips eBay's fee and shipping" in verdict.reason
 
     def test_no_local_comps_leaves_local_net_none(self) -> None:
         verdict = build_verdict(

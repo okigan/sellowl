@@ -151,7 +151,7 @@ def build_verdict(
         current_net = net_proceeds_ebay(ask_price, shipping, fees)
         opportunity = best_net - current_net
 
-    reason = _reason(kind, condition, sold_band, venue)
+    reason = _reason(kind, condition, sold_band, local_band, venue)
     if local_band is not None and not local_trusted:
         reason += " (Local asks looked scattered/mismatched — ignored for pricing.)"
 
@@ -171,27 +171,53 @@ def build_verdict(
     )
 
 
-def _reason(kind: VerdictKind, condition: Condition, band: PriceBand, venue: Venue) -> str:
-    where = "locally, in person" if venue is Venue.FB_LOCAL else "on eBay"
+def _reason(
+    kind: VerdictKind,
+    condition: Condition,
+    sold_band: PriceBand,
+    local_band: PriceBand | None,
+    venue: Venue,
+) -> str:
+    """One sentence that never contradicts itself.
+
+    `kind` (under/over/fair) is judged only against eBay sold comps; the
+    recommended venue can independently be local, whenever local asks net
+    more than eBay would. Reporting those two facts without connecting them
+    reads as a contradiction ("fair" priced, yet a large "opportunity" and
+    "sell local") — so every branch below states the eBay judgment AND,
+    whenever local is the actual recommendation, the local premium driving
+    it, in the same sentence.
+    """
     grade = condition.value
+    local_wins = venue is Venue.FB_LOCAL
+    local_premium = ""
+    if local_wins and local_band is not None:
+        if local_band.p50 > sold_band.p50:
+            why = f"Local asks run higher (median ${local_band.p50:,.0f})"
+        else:
+            # Local can still win on a lower or similar gross price: no eBay
+            # fee, no shipping. Saying "local asks run higher" here would be
+            # false — the median is right there in local_band for anyone to
+            # check against this sentence.
+            why = "Selling locally skips eBay's fee and shipping"
+        local_premium = f" {why} though — sell locally, in person, for more."
     match kind:
         case VerdictKind.UNDERPRICED:
-            return (
-                f"Below the {grade} band (p25 ${band.p25:,.0f}). "
-                f"Median sold is ${band.p50:,.0f} across {band.n} comps. Sell {where}."
+            base = (
+                f"Below the {grade} band (p25 ${sold_band.p25:,.0f}) on eBay. "
+                f"Median sold there is ${sold_band.p50:,.0f} across {sold_band.n} comps."
             )
+            return base + (local_premium or " Sell on eBay.")
         case VerdictKind.OVERPRICED:
-            if venue is Venue.FB_LOCAL:
-                return (
-                    f"Above the {grade} band (p75 ${band.p75:,.0f}) — eBay buyers won't pay "
-                    f"this. Sell {where} instead, where asking prices run higher than eBay's "
-                    f"median (${band.p50:,.0f})."
-                )
-            return (
-                f"Above the {grade} band (p75 ${band.p75:,.0f}). "
-                f"Reduce toward ${band.p50:,.0f} to actually move it."
-            )
+            base = f"Above the {grade} band (p75 ${sold_band.p75:,.0f}) on eBay."
+            if local_wins:
+                return base + " eBay buyers won't pay this." + local_premium
+            return base + f" Reduce toward ${sold_band.p50:,.0f} to actually move it."
         case VerdictKind.FAIR:
-            return f"Within the {grade} band (${band.p25:,.0f}–${band.p75:,.0f}). Sell {where}."
+            base = (
+                f"In line with what this sells for on eBay "
+                f"(${sold_band.p25:,.0f}–${sold_band.p75:,.0f})."
+            )
+            return base + (local_premium or " Sell on eBay.")
         case VerdictKind.INSUFFICIENT_DATA:
             return "Not enough matched comps to quote a band."
