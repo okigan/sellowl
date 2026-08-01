@@ -175,6 +175,30 @@ class TestConditionMatchedPrices:
         comps = [comp("a", price=None, condition=Condition.CLEAN)]
         assert condition_matched_prices(comps, "clean") == []
 
+    def test_falls_back_when_bucket_is_too_small_to_quote(self) -> None:
+        """Real hack-night regression: once vision graded both sides, an
+        exact-condition bucket of 2 (below min_comps=5) was returned as-is,
+        reporting "insufficient data" even though 5 total comps existed."""
+        comps = [
+            comp("usable1", price=8.99, condition=Condition.USABLE),
+            comp("usable2", price=10.99, condition=Condition.USABLE),
+            comp("clean1", price=39.0, condition=Condition.CLEAN),
+            comp("clean2", price=30.0, condition=Condition.CLEAN),
+            comp("clean3", price=15.0, condition=Condition.CLEAN),
+        ]
+        assert len(condition_matched_prices(comps, "usable")) == 2  # default min_comps=1
+        blended = condition_matched_prices(comps, "usable", min_comps=5)
+        assert len(blended) == 5
+        assert sorted(blended) == [8.99, 10.99, 15.0, 30.0, 39.0]
+
+    def test_still_prefers_the_bucket_when_it_meets_min_comps(self) -> None:
+        comps = [
+            comp("usable1", price=200.0, condition=Condition.USABLE),
+            comp("usable2", price=210.0, condition=Condition.USABLE),
+            comp("clean1", price=300.0, condition=Condition.CLEAN),
+        ]
+        assert sorted(condition_matched_prices(comps, "usable", min_comps=2)) == [200.0, 210.0]
+
 
 class TestQueryShapes:
     def test_rrf_query_has_both_legs(self) -> None:

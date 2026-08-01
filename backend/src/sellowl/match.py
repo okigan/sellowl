@@ -148,17 +148,24 @@ def apply_guards(
     return kept
 
 
-def condition_matched_prices(comps: list[Comp], condition_value: str) -> list[float]:
+def condition_matched_prices(
+    comps: list[Comp], condition_value: str, min_comps: int = 1
+) -> list[float]:
     """Prices of comps in the same condition bucket.
 
-    Falls back to every priced comp when the item's own grade is unknown or
-    nothing matches it — a wider band beats no band, and the UI says which
-    happened.
+    Falls back to every priced comp when the item's own grade is unknown, or
+    when fewer than `min_comps` comps share it -- a wider, blended band beats
+    no band at all, and the UI says which happened. Before condition grading
+    had real data on both sides (vision on), this fallback only ever fired on
+    a literal zero; with real per-comp grades, an exact-condition bucket can
+    legitimately land below the quoting threshold even though plenty of
+    comps exist overall, and narrowing to too few of them was producing
+    "insufficient data" that a blended band would have avoided.
     """
     priced = [c for c in comps if c.price is not None and c.price > 0]
     if condition_value and condition_value != "unknown":
         same = [c.price for c in priced if c.condition.value == condition_value]
-        if same:
+        if len(same) >= min_comps:
             # `priced` already guarantees price is not None; filtered again so
             # mypy can narrow `list[float | None]` to `list[float]`.
             return [p for p in same if p is not None]

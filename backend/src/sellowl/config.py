@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     vision_base_url: str = ""
     vision_api_key: str = ""
     vision_model: str = ""
+    # Comp photos repeat heavily across re-analyzes of the same store; cache
+    # grades on disk like Apify runs. 0 disables. DELETE /api/cache clears it.
+    vision_cache_ttl_hours: float = 20.0
 
     # --- actor slugs -----------------------------------------------------
     # Config, not constants: swapping a failed actor mid-event must be an env

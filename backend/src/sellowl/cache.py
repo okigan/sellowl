@@ -1,9 +1,11 @@
-"""On-disk cache for slow, idempotent calls (Apify actor runs).
+"""On-disk cache for slow or repeated idempotent calls.
 
-Actor runs take minutes and repeat identical (actor, payload) pairs across
-dev iterations and re-analyzes of the same store — caching them is the
-single biggest latency win available. One JSON file per key, TTL checked
-on read. Not for correctness-sensitive data: callers decide what's cacheable.
+Apify actor runs take minutes; vision grading calls a model per photo. Both
+repeat identical inputs across dev iterations and re-analyzes of the same
+store, so caching them is the single biggest latency win available. One
+JSON file per key, TTL checked on read, one subdirectory per namespace so
+`DELETE /api/cache` can clear everything at once. Not for correctness-
+sensitive data: callers decide what's cacheable.
 """
 
 from __future__ import annotations
@@ -19,7 +21,9 @@ from .logging import get_logger
 
 log = get_logger(__name__)
 
-DEFAULT_CACHE_DIR = Path(".cache/apify")
+CACHE_ROOT = Path(".cache")
+DEFAULT_CACHE_DIR = CACHE_ROOT / "apify"
+VISION_CACHE_DIR = CACHE_ROOT / "vision"
 
 
 def _key_path(cache_dir: Path, key: str) -> Path:
@@ -37,7 +41,7 @@ def cache_get(key: str, *, ttl_seconds: float, cache_dir: Path = DEFAULT_CACHE_D
         return None
     try:
         envelope = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
+    except json.JSONDecodeError, OSError:
         return None
     age = time.time() - envelope["cached_at"]
     if age > ttl_seconds:
@@ -52,10 +56,11 @@ def cache_set(key: str, value: Any, *, cache_dir: Path = DEFAULT_CACHE_DIR) -> N
     path.write_text(json.dumps({"cached_at": time.time(), "value": value}))
 
 
-def cache_clear(cache_dir: Path = DEFAULT_CACHE_DIR) -> int:
+def cache_clear(cache_dir: Path = CACHE_ROOT) -> int:
+    """Clears every namespace under `cache_dir` (the whole cache by default)."""
     if not cache_dir.exists():
         return 0
-    count = sum(1 for _ in cache_dir.glob("*.json"))
+    count = sum(1 for _ in cache_dir.rglob("*.json"))
     shutil.rmtree(cache_dir)
-    log.info("cache_cleared", entries=count)
+    log.info("cache_cleared", entries=count, cache_dir=str(cache_dir))
     return count

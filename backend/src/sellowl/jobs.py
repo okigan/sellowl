@@ -240,8 +240,12 @@ class Pipeline:
             local = [c for c in item.comps if c.venue is Venue.FB_LOCAL]
             item.verdict = build_verdict(
                 ask_price=item.ask_price,
-                sold_prices=condition_matched_prices(sold, vision.condition.value),
-                local_prices=condition_matched_prices(local, vision.condition.value),
+                sold_prices=condition_matched_prices(
+                    sold, vision.condition.value, self._s.min_comps
+                ),
+                local_prices=condition_matched_prices(
+                    local, vision.condition.value, self._s.min_comps
+                ),
                 attributes=vision.attributes,
                 condition=vision.condition,
                 fees=self._fees,

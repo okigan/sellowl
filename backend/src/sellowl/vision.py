@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 from typing import Any, Literal
 
@@ -28,6 +29,7 @@ from openai.types.chat import (
     ChatCompletionUserMessageParam,
 )
 
+from .cache import VISION_CACHE_DIR, cache_get, cache_key, cache_set
 from .config import Settings
 from .logging import get_logger
 from .models import Condition, VisionResult
@@ -162,15 +164,28 @@ class VisionGrader:
             self._model = settings.anthropic_model
 
         self._sem = asyncio.Semaphore(settings.vision_concurrency)
+        self._cache_ttl_s = settings.vision_cache_ttl_hours * 3600
 
     @property
     def enabled(self) -> bool:
         return self._anthropic is not None or self._openai is not None
 
     async def grade(self, photo: bytes | None, title: str) -> VisionResult:
-        """Grade one photo. Never raises: a failed grade degrades one row."""
+        """Grade one photo. Never raises: a failed grade degrades one row.
+
+        Comp photos repeat heavily across re-analyzes of the same store (the
+        same eBay sold / Facebook comps get retrieved every time), and each
+        call costs a couple of seconds — cached on disk like Apify runs.
+        """
         if not self.enabled or not photo:
             return _fallback(title)
+
+        digest = hashlib.sha256(photo).hexdigest()
+        key = cache_key("vision_grade", self._provider, self._model, digest, title)
+        if self._cache_ttl_s > 0:
+            cached = cache_get(key, ttl_seconds=self._cache_ttl_s, cache_dir=VISION_CACHE_DIR)
+            if cached is not None:
+                return VisionResult.model_validate(cached)
 
         async with self._sem:
             try:
@@ -188,6 +203,8 @@ class VisionGrader:
             result.canonical_description = title
         if not result.search_query_broad:
             result.search_query_broad = _broad_from_title(title)
+        if self._cache_ttl_s > 0:
+            cache_set(key, result.model_dump(mode="json"), cache_dir=VISION_CACHE_DIR)
         return result
 
     async def _grade_anthropic(self, client: AsyncAnthropic, photo: bytes, title: str) -> str:

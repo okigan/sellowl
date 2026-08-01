@@ -6,8 +6,15 @@ in a sentence. A malformed grade must degrade one row, never fail a job.
 
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from sellowl.config import Settings
 from sellowl.models import Condition
-from sellowl.vision import _broad_from_title, _media_type, parse_vision_json
+from sellowl.vision import VisionGrader, _broad_from_title, _media_type, parse_vision_json
 
 GOOD = """{
   "canonical_description": "mid-century teak sideboard, tapered legs, brass pulls",
@@ -83,3 +90,66 @@ class TestMediaType:
 
     def test_unknown_defaults_to_jpeg(self) -> None:
         assert _media_type(b"zzzz") == "image/jpeg"
+
+
+class FakeOpenAI:
+    """Counts calls so the cache test can assert the network path only runs once."""
+
+    def __init__(self, reply: str) -> None:
+        self.calls = 0
+        self._reply = reply
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+    async def _create(self, **_kwargs: Any) -> Any:
+        self.calls += 1
+        message = SimpleNamespace(content=self._reply)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+class TestVisionGraderCaching:
+    """Comp photos repeat across re-analyzes of the same store; grading them
+    again every run wastes a real network call per photo."""
+
+    @pytest.fixture
+    def grader(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[VisionGrader, FakeOpenAI]:
+        monkeypatch.setattr("sellowl.vision.VISION_CACHE_DIR", tmp_path)
+        settings = Settings(
+            vision_provider="openai",
+            vision_base_url="http://fake",
+            vision_api_key="fake",
+            vision_model="fake-model",
+        )
+        g = VisionGrader(settings)
+        fake = FakeOpenAI('{"canonical_description": "a teak bowl", "condition": "clean"}')
+        g._openai = fake  # type: ignore[assignment]
+        return g, fake
+
+    async def test_second_call_for_the_same_photo_hits_cache(
+        self, grader: tuple[VisionGrader, FakeOpenAI]
+    ) -> None:
+        g, fake = grader
+        photo = b"\xff\xd8\xff fake jpeg bytes"
+        first = await g.grade(photo, "vintage bowl")
+        second = await g.grade(photo, "vintage bowl")
+        assert fake.calls == 1
+        assert first.canonical_description == second.canonical_description == "a teak bowl"
+
+    async def test_different_photo_is_a_separate_cache_entry(
+        self, grader: tuple[VisionGrader, FakeOpenAI]
+    ) -> None:
+        g, fake = grader
+        await g.grade(b"\xff\xd8\xff photo one", "vintage bowl")
+        await g.grade(b"\xff\xd8\xff photo two", "vintage bowl")
+        assert fake.calls == 2
+
+    async def test_different_title_is_a_separate_cache_entry(
+        self, grader: tuple[VisionGrader, FakeOpenAI]
+    ) -> None:
+        """Title is part of the prompt, so it must be part of the cache key."""
+        g, fake = grader
+        photo = b"\xff\xd8\xff fake jpeg bytes"
+        await g.grade(photo, "vintage bowl")
+        await g.grade(photo, "modern vase")
+        assert fake.calls == 2
