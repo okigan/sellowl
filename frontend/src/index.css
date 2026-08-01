@@ -1,0 +1,70 @@
+@import "tailwindcss";
+
+/* Dark by default — it demos better in a dim room. */
+@theme {
+  --color-ink: #0b0d10;
+  --color-panel: #14181d;
+  --color-line: #232a32;
+  --color-muted: #8b97a6;
+  --color-text: #e6ecf3;
+  /* The one accent: money left on the table. Nothing else gets this colour. */
+  --color-money: #4ade80;
+  --color-warn: #fbbf24;
+  --color-bad: #f87171;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--color-ink);
+  color: var(--color-text);
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  /* Prices in a column must align. */
+  font-variant-numeric: tabular-nums;
+}
+
+/* The one animation that earns its place. */
+@keyframes rowIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.row-in {
+  animation: rowIn 220ms ease-out both;
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--color-line);
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.06), transparent);
+  animation: shimmer 1.4s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row-in,
+  .skeleton::after {
+    animation: none;
+  }
+}

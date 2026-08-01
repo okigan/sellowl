@@ -1,0 +1,66 @@
+[
+  {
+    "facebookUrl": "https://www.facebook.com/marketplace/austin/search/?query=teak%20sideboard",
+    "listingUrl": "https://www.facebook.com/marketplace/item/1189200412268517",
+    "id": "1189200412268517",
+    "primary_listing_photo": {
+      "__typename": "ProductImage",
+      "image": {
+        "uri": "https://scontent-hou1-1.xx.fbcdn.net/v/t45.5328-4/437005937.jpg?oe=664AF519"
+      },
+      "id": "3853471898214198"
+    },
+    "listing_price": {
+      "formatted_amount": "$240",
+      "amount_with_offset_in_currency": "24000",
+      "amount": "240.00"
+    },
+    "strikethrough_price": null,
+    "comparable_price": null,
+    "location": {
+      "reverse_geocode": {
+        "city": "Austin",
+        "state": "TX",
+        "city_page": { "display_name": "Austin, Texas", "id": "114952118516947" }
+      }
+    },
+    "is_hidden": false,
+    "is_live": true,
+    "is_pending": false,
+    "is_sold": false,
+    "marketplace_listing_title": "Mid century teak credenza",
+    "custom_title": null,
+    "listing_video": null,
+    "marketplace_listing_seller": { "__typename": "User", "name": "Gabi S", "id": "pfbid02" },
+    "delivery_types": ["IN_PERSON"]
+  },
+  {
+    "listingUrl": "https://www.facebook.com/marketplace/item/890679662817803",
+    "id": "890679662817803",
+    "primary_listing_photo": {
+      "image": { "uri": "https://scontent-hou1-1.xx.fbcdn.net/v/t45.5328-4/427212581.jpg?oe=664ADF4D" }
+    },
+    "listing_price": { "formatted_amount": "$190", "amount": "190.00" },
+    "location": { "reverse_geocode": { "city": "Round Rock", "state": "TX" } },
+    "is_live": true,
+    "is_sold": false,
+    "marketplace_listing_title": "wood dresser thing",
+    "delivery_types": ["IN_PERSON"]
+  },
+  {
+    "listingUrl": "https://www.facebook.com/marketplace/item/111",
+    "id": "111",
+    "listing_price": { "formatted_amount": "$1,250", "amount": "1250.00" },
+    "location": { "reverse_geocode": { "city": "Austin", "state": "TX" } },
+    "marketplace_listing_title": "Danish modern teak sideboard restored",
+    "is_sold": true,
+    "delivery_types": ["IN_PERSON", "SHIPPING"]
+  },
+  {
+    "listingUrl": "https://www.facebook.com/marketplace/item/222",
+    "id": "222",
+    "marketplace_listing_title": "free couch curb alert",
+    "listing_price": null,
+    "location": { "reverse_geocode": { "city": "Austin", "state": "TX" } }
+  }
+]
