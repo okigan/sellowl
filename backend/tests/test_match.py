@@ -127,6 +127,17 @@ class TestAttributesAgree:
             {"brand": "Apricorn", "category": "padlock"},
         )
 
+    def test_model_is_not_a_hard_attribute(self) -> None:
+        """Same reasoning as category: model-name text read off packaging is
+        inconsistent between two independent vision calls ("Aegis Secure Key
+        3" vs. "Aegis Secure Key 3z" for the same physical line) -- captured
+        for audit, not enforced, until there's a real corpus showing the
+        vocabulary is consistent enough to gate on."""
+        assert attributes_agree(
+            {"brand": "Apricorn", "model": "Aegis Secure Key 3"},
+            {"brand": "Apricorn", "model": "Aegis Secure Key 3NX"},
+        )
+
 
 class TestParseQuantity:
     def test_number_and_unit(self) -> None:

@@ -52,14 +52,23 @@ Return ONLY a JSON object, no prose, with exactly these keys:
   canonical_description  A dense factual description someone would search for:
                          object type, material, style, era, distinguishing
                          features. No marketing language. Max 30 words.
-  attributes             Object with any of: category, material, brand, era,
-                         style, size_class (one of: small, medium, large,
-                         xlarge), color, capacity. Omit keys you cannot
-                         determine from the photo. Never guess a brand.
+  attributes             Object with any of: category, model, material,
+                         brand, era, style, size_class (one of: small,
+                         medium, large, xlarge), color, capacity. Omit keys
+                         you cannot determine from the photo. Never guess a
+                         brand or model.
                          category  What KIND of object this is, 1-3 plain
                          words (e.g. "USB flash drive", "padlock", "case
                          fan", "radiator"). Keep it short and generic, not a
                          precise model description.
+                         model  The specific product line or generation
+                         printed on the item or packaging, if legible (e.g.
+                         "Aegis Secure Key 3NX", "Riing Trio", "Pacific
+                         C-Pro"). Different from `category`: two items can
+                         share a category and brand and still be different
+                         models with different typical prices. Only from
+                         text you can actually read — never guess or infer
+                         one from context.
                          capacity  A storage/volume/quantity spec printed on
                          the item or its packaging (e.g. "4GB", "64GB",
                          "2-pack", "500ml"). Only from text you can actually
