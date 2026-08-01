@@ -8,13 +8,14 @@ fusion logic under test is the fusion logic that ships.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Protocol
 
 from elasticsearch import AsyncElasticsearch
 
 from .logging import get_logger
 from .match import build_fallback_queries, build_rrf_query, rrf_fuse
-from .models import Comp, Venue
+from .models import Comp, Condition, Venue
 
 log = get_logger(__name__)
 
@@ -66,6 +67,38 @@ def comp_to_doc(comp: Comp) -> dict[str, Any]:
     }
 
 
+def doc_to_comp(source: dict[str, Any], score: float) -> Comp:
+    """Reconstruct a `Comp` straight from an Elasticsearch hit's `_source`.
+
+    Search is not scoped to one job's data (the index accumulates comps
+    across every job that ever ran), so a top-scoring hit is very often a
+    document a *different* job indexed. It must be built from what the
+    cluster actually returned, not looked up in this instance's own bulk-
+    upsert cache — that cache only ever has this job's comps in it, so any
+    hit from another job silently vanished before this fix.
+    """
+    return Comp(
+        external_id=str(source.get("external_id", "")),
+        venue=Venue(source["venue"]),
+        title=str(source.get("title", "")),
+        price=source.get("price"),
+        url=str(source.get("url", "")),
+        photo_url=str(source.get("photo_url", "")),
+        city=str(source.get("city", "")),
+        state=str(source.get("state", "")),
+        delivery=list(source.get("delivery") or []),
+        sold_at=datetime.fromisoformat(source["sold_at"]) if source.get("sold_at") else None,
+        is_sold=bool(source.get("is_sold", False)),
+        condition=Condition(source.get("condition") or "unknown"),
+        condition_evidence=str(source.get("condition_evidence", "")),
+        attributes=dict(source.get("attributes") or {}),
+        description=str(source.get("description", "")),
+        score=score,
+        scraped_at=datetime.fromisoformat(source["scraped_at"]),
+        job_id=str(source.get("job_id", "")),
+    )
+
+
 class CompStore(Protocol):
     async def ensure_indices(self) -> None: ...
     async def upsert_comps(self, comps: list[Comp]) -> int: ...
@@ -80,7 +113,6 @@ class ElasticCompStore:
         self._client = AsyncElasticsearch(endpoint, api_key=api_key, request_timeout=30)
         self._index = index
         self._rrf = rrf_enabled
-        self._by_id: dict[str, Comp] = {}
 
     async def ensure_indices(self) -> None:
         if not await self._client.indices.exists(index=self._index):
@@ -92,7 +124,6 @@ class ElasticCompStore:
             return 0
         operations: list[dict[str, Any]] = []
         for comp in comps:
-            self._by_id[comp.doc_id] = comp
             operations.append({"index": {"_index": self._index, "_id": comp.doc_id}})
             operations.append(comp_to_doc(comp))
         resp = await self._client.bulk(operations=operations, refresh=True)
@@ -108,28 +139,17 @@ class ElasticCompStore:
     async def find_comps(
         self, *, bm25_query: str, semantic_query: str, venue: Venue, size: int, job_id: str
     ) -> list[Comp]:
-        hits: list[tuple[str, float]]
         if self._rrf:
             try:
-                hits = await self._search_rrf(bm25_query, semantic_query, venue, size)
+                return await self._search_rrf(bm25_query, semantic_query, venue, size)
             except Exception as exc:  # noqa: BLE001 - old cluster, no retriever support
                 log.warning("rrf_retriever_failed", error=str(exc), fallback="python_fusion")
                 self._rrf = False
-                hits = await self._search_fused(bm25_query, semantic_query, venue, size)
-        else:
-            hits = await self._search_fused(bm25_query, semantic_query, venue, size)
-
-        results: list[Comp] = []
-        for doc_id, score in hits[:size]:
-            comp = self._by_id.get(doc_id)
-            if comp is None:
-                continue
-            results.append(comp.model_copy(update={"score": score}))
-        return results
+        return await self._search_fused(bm25_query, semantic_query, venue, size)
 
     async def _search_rrf(
         self, bm25_query: str, semantic_query: str, venue: Venue, size: int
-    ) -> list[tuple[str, float]]:
+    ) -> list[Comp]:
         body = build_rrf_query(
             bm25_query=bm25_query,
             semantic_query=semantic_query,
@@ -137,11 +157,13 @@ class ElasticCompStore:
             venue=venue.value,
         )
         resp = await self._client.search(index=self._index, **body)
-        return [(h["_id"], float(h.get("_score") or 0.0)) for h in resp["hits"]["hits"]]
+        return [
+            doc_to_comp(h["_source"], float(h.get("_score") or 0.0)) for h in resp["hits"]["hits"]
+        ]
 
     async def _search_fused(
         self, bm25_query: str, semantic_query: str, venue: Venue, size: int
-    ) -> list[tuple[str, float]]:
+    ) -> list[Comp]:
         bm25_body, semantic_body = build_fallback_queries(
             bm25_query=bm25_query,
             semantic_query=semantic_query,
@@ -149,15 +171,22 @@ class ElasticCompStore:
             venue=venue.value,
         )
         rankings: list[list[str]] = []
+        sources: dict[str, dict[str, Any]] = {}
         for body in (bm25_body, semantic_body):
             try:
                 resp = await self._client.search(index=self._index, **body)
             except Exception as exc:  # noqa: BLE001 - semantic may be unavailable
                 log.warning("retrieval_leg_failed", error=str(exc))
                 continue
-            rankings.append([h["_id"] for h in resp["hits"]["hits"]])
+            hits = resp["hits"]["hits"]
+            rankings.append([h["_id"] for h in hits])
+            for h in hits:
+                sources[h["_id"]] = h["_source"]
         fused = rrf_fuse(rankings)
-        return sorted(fused.items(), key=lambda kv: kv[1], reverse=True)
+        ordered = sorted(fused.items(), key=lambda kv: kv[1], reverse=True)[:size]
+        return [
+            doc_to_comp(sources[doc_id], score) for doc_id, score in ordered if doc_id in sources
+        ]
 
     async def close(self) -> None:
         await self._client.close()

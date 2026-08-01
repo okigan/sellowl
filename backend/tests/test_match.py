@@ -98,6 +98,18 @@ class TestAttributesAgree:
             {"material": "teak", "brand": "other"},
         )
 
+    def test_compound_value_agrees_by_substring(self) -> None:
+        """Two independent vision calls describe the same real material in
+        different words — real hack-night regression: this was rejecting
+        almost every comp once vision started populating both sides."""
+        assert attributes_agree({"material": "Plastic, Acrylic"}, {"material": "acrylic"})
+        assert attributes_agree({"material": "aluminum"}, {"material": "Aluminum, painted"})
+
+    def test_size_class_is_not_a_hard_attribute(self) -> None:
+        """Coarse and subjective between two photos of the same product —
+        used for shipping estimation, not identity."""
+        assert attributes_agree({"size_class": "small"}, {"size_class": "large"})
+
 
 class TestApplyGuards:
     def test_drops_unpriced(self) -> None:

@@ -16,7 +16,13 @@ from .models import Comp
 
 # Attributes where a disagreement means it is a different product, not a
 # variant. Compared only when both sides actually have the attribute.
-HARD_ATTRIBUTES = ("material", "brand", "era", "size_class")
+# size_class deliberately excluded: it is a coarse, subjective LLM judgment
+# (small/medium/large/xlarge) that varies between two photos of the exact
+# same product depending on framing and context — useful for shipping-cost
+# estimation (see pricing.shipping_estimate), not reliable as an identity
+# signal, and firing on it dropped nearly every comp for every item once
+# vision started actually populating attributes on both sides.
+HARD_ATTRIBUTES = ("material", "brand", "era")
 
 RANK_CONSTANT = 20
 RANK_WINDOW = 50
@@ -105,15 +111,19 @@ def attributes_agree(
     comp_attrs: dict[str, str],
     hard_keys: tuple[str, ...] = HARD_ATTRIBUTES,
 ) -> bool:
-    """False when a hard attribute is present on both sides and differs.
+    """False when a hard attribute is present on both sides and conflicts.
 
     A missing attribute is not a disagreement — most comps never get a vision
-    pass, and absence of evidence must not drop them.
+    pass, and absence of evidence must not drop them. Values agree if either
+    is a substring of the other: two independent vision calls describe the
+    same real material in different words ("Plastic, Acrylic" vs. "acrylic"),
+    and treating that phrasing variance as a hard conflict was rejecting
+    almost every genuine match once both sides had real attributes.
     """
     for key in hard_keys:
         mine = item_attrs.get(key, "").strip().lower()
         theirs = comp_attrs.get(key, "").strip().lower()
-        if mine and theirs and mine != theirs:
+        if mine and theirs and mine not in theirs and theirs not in mine:
             return False
     return True
 
