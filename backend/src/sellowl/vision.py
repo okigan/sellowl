@@ -1,9 +1,15 @@
-"""Claude vision: a listing photo becomes the query.
+"""Vision: a listing photo becomes the query.
 
 Your own listing titles are bad — everyone's are ("vintage bowl green"). The
 photo isn't. So the photo generates the canonical description we match on, the
 condition grade nothing else captures, and the search query we hand the
 scrapers. One call, three jobs.
+
+Two interchangeable backends, same prompt and JSON contract:
+- "anthropic": Claude, via the anthropic SDK.
+- "openai": any OpenAI-compatible chat-completions server (vLLM, llama.cpp
+  server, etc.) — e.g. a local Qwen3-VL/Qwen3.6 vision model. Selected by
+  `Settings.vision_provider`; see config.py.
 """
 
 from __future__ import annotations
@@ -15,7 +21,14 @@ from typing import Any, Literal
 
 from anthropic import AsyncAnthropic
 from anthropic.types import ImageBlockParam, TextBlockParam
+from openai import AsyncOpenAI
+from openai.types.chat import (
+    ChatCompletionContentPartImageParam,
+    ChatCompletionContentPartTextParam,
+    ChatCompletionUserMessageParam,
+)
 
+from .config import Settings
 from .logging import get_logger
 from .models import Condition, VisionResult
 
@@ -64,6 +77,30 @@ def _media_type(data: bytes) -> MediaType:
     return "image/jpeg"
 
 
+# Not every model sticks to the three-bucket vocabulary the prompt asks for
+# (e.g. a general-purpose vision model answering "new" instead of "clean").
+# Map common synonyms rather than silently discarding the grade as unknown.
+_CONDITION_SYNONYMS: dict[str, str] = {
+    "new": "clean",
+    "brand new": "clean",
+    "like new": "clean",
+    "mint": "clean",
+    "excellent": "clean",
+    "good": "usable",
+    "fair": "usable",
+    "used": "usable",
+    "pre-owned": "usable",
+    "preowned": "usable",
+    "worn": "usable",
+    "fair condition": "usable",
+    "poor": "rough",
+    "damaged": "rough",
+    "broken": "rough",
+    "for parts": "rough",
+    "not working": "rough",
+}
+
+
 def parse_vision_json(text: str) -> VisionResult:
     """Parse the model's reply, tolerating fences and surrounding prose."""
     body = text.strip()
@@ -90,8 +127,10 @@ def parse_vision_json(text: str) -> VisionResult:
         if isinstance(attrs_raw, dict)
         else {}
     )
+    condition_text = str(raw.get("condition", "")).strip().lower()
+    condition_text = _CONDITION_SYNONYMS.get(condition_text, condition_text)
     try:
-        condition = Condition(str(raw.get("condition", "")).strip().lower())
+        condition = Condition(condition_text)
     except ValueError:
         condition = Condition.UNKNOWN
 
@@ -106,20 +145,52 @@ def parse_vision_json(text: str) -> VisionResult:
 
 
 class VisionGrader:
-    def __init__(self, api_key: str, model: str, concurrency: int = 8) -> None:
-        self._client = AsyncAnthropic(api_key=api_key) if api_key else None
-        self._model = model
-        self._sem = asyncio.Semaphore(concurrency)
+    def __init__(self, settings: Settings) -> None:
+        self._provider = settings.vision_provider
+        self._anthropic: AsyncAnthropic | None = None
+        self._openai: AsyncOpenAI | None = None
+        self._model = ""
+
+        if self._provider == "openai":
+            if settings.vision_base_url and settings.vision_api_key:
+                self._openai = AsyncOpenAI(
+                    base_url=settings.vision_base_url, api_key=settings.vision_api_key
+                )
+                self._model = settings.vision_model
+        elif settings.anthropic_api_key:
+            self._anthropic = AsyncAnthropic(api_key=settings.anthropic_api_key)
+            self._model = settings.anthropic_model
+
+        self._sem = asyncio.Semaphore(settings.vision_concurrency)
 
     @property
     def enabled(self) -> bool:
-        return self._client is not None
+        return self._anthropic is not None or self._openai is not None
 
     async def grade(self, photo: bytes | None, title: str) -> VisionResult:
         """Grade one photo. Never raises: a failed grade degrades one row."""
-        if self._client is None or not photo:
+        if not self.enabled or not photo:
             return _fallback(title)
 
+        async with self._sem:
+            try:
+                if self._openai is not None:
+                    text = await self._grade_openai(self._openai, photo, title)
+                else:
+                    assert self._anthropic is not None
+                    text = await self._grade_anthropic(self._anthropic, photo, title)
+            except Exception as exc:  # noqa: BLE001 - one bad photo must not kill a job
+                log.warning("vision_call_failed", title=title[:60], error=str(exc))
+                return _fallback(title)
+
+        result = parse_vision_json(text)
+        if not result.canonical_description:
+            result.canonical_description = title
+        if not result.search_query_broad:
+            result.search_query_broad = _broad_from_title(title)
+        return result
+
+    async def _grade_anthropic(self, client: AsyncAnthropic, photo: bytes, title: str) -> str:
         image_block: ImageBlockParam = {
             "type": "image",
             "source": {
@@ -129,29 +200,37 @@ class VisionGrader:
             },
         }
         text_block: TextBlockParam = {"type": "text", "text": PROMPT.format(title=title)}
-
-        async with self._sem:
-            try:
-                message = await self._client.messages.create(
-                    model=self._model,
-                    max_tokens=600,
-                    messages=[{"role": "user", "content": [image_block, text_block]}],
-                )
-            except Exception as exc:  # noqa: BLE001 - one bad photo must not kill a job
-                log.warning("vision_call_failed", title=title[:60], error=str(exc))
-                return _fallback(title)
-
-        text = "".join(
+        message = await client.messages.create(
+            model=self._model,
+            max_tokens=600,
+            messages=[{"role": "user", "content": [image_block, text_block]}],
+        )
+        return "".join(
             str(getattr(block, "text", ""))
             for block in message.content
             if getattr(block, "type", "") == "text"
         )
-        result = parse_vision_json(text)
-        if not result.canonical_description:
-            result.canonical_description = title
-        if not result.search_query_broad:
-            result.search_query_broad = _broad_from_title(title)
-        return result
+
+    async def _grade_openai(self, client: AsyncOpenAI, photo: bytes, title: str) -> str:
+        data_url = f"data:{_media_type(photo)};base64,{base64.standard_b64encode(photo).decode()}"
+        image_part: ChatCompletionContentPartImageParam = {
+            "type": "image_url",
+            "image_url": {"url": data_url},
+        }
+        text_part: ChatCompletionContentPartTextParam = {
+            "type": "text",
+            "text": PROMPT.format(title=title),
+        }
+        message: ChatCompletionUserMessageParam = {
+            "role": "user",
+            "content": [image_part, text_part],
+        }
+        response = await client.chat.completions.create(
+            model=self._model,
+            max_tokens=600,
+            messages=[message],
+        )
+        return response.choices[0].message.content or ""
 
     async def grade_many(self, photos: list[tuple[bytes | None, str]]) -> list[VisionResult]:
         return list(await asyncio.gather(*(self.grade(p, t) for p, t in photos)))

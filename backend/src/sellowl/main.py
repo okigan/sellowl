@@ -63,7 +63,7 @@ async def health() -> dict[str, object]:
         "ok": True,
         "elastic_configured": settings.elastic_configured,
         "apify_configured": bool(settings.apify_token),
-        "anthropic_configured": bool(settings.anthropic_api_key),
+        "vision_configured": settings.vision_configured,
         "default_store_url": settings.default_store_url,
         "metro": settings.metro,
     }

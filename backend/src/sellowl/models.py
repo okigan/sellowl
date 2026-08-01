@@ -117,13 +117,19 @@ class Item(BaseModel):
     photo_url: str = ""
     store_url: str = ""
     job_id: str = ""
+    # The seller's own condition string off the store listing, normalized.
+    # Real signal available even when vision is off — see vision.condition,
+    # which takes priority once a photo grade exists.
+    listed_condition: Condition = Condition.UNKNOWN
     vision: VisionResult | None = None
     comps: list[Comp] = Field(default_factory=list)
     verdict: Verdict | None = None
 
     @property
     def condition(self) -> Condition:
-        return self.vision.condition if self.vision else Condition.UNKNOWN
+        if self.vision and self.vision.condition is not Condition.UNKNOWN:
+            return self.vision.condition
+        return self.listed_condition
 
 
 class JobStage(BaseModel):

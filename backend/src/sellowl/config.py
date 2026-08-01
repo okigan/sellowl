@@ -24,6 +24,16 @@ class Settings(BaseSettings):
     elasticsearch_endpoint: str = ""
     elasticsearch_api_key: str = ""
 
+    # --- vision ------------------------------------------------------------
+    # "anthropic" uses anthropic_api_key/anthropic_model above. "openai" talks
+    # to any OpenAI-compatible chat-completions endpoint (vLLM, llama.cpp
+    # server, etc.) via vision_base_url/vision_api_key/vision_model — same
+    # prompt and JSON contract either way, see vision.py.
+    vision_provider: str = "anthropic"
+    vision_base_url: str = ""
+    vision_api_key: str = ""
+    vision_model: str = ""
+
     # --- actor slugs -----------------------------------------------------
     # Config, not constants: swapping a failed actor mid-event must be an env
     # change and a restart, never a code change.
@@ -73,6 +83,12 @@ class Settings(BaseSettings):
     @property
     def elastic_configured(self) -> bool:
         return bool(self.elasticsearch_endpoint and self.elasticsearch_api_key)
+
+    @property
+    def vision_configured(self) -> bool:
+        if self.vision_provider == "openai":
+            return bool(self.vision_base_url and self.vision_api_key and self.vision_model)
+        return bool(self.anthropic_api_key)
 
 
 @lru_cache

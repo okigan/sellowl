@@ -17,7 +17,7 @@ from .config import Settings
 from .index import CompStore, ElasticCompStore, MemoryCompStore
 from .logging import get_logger
 from .match import apply_guards, condition_matched_prices
-from .models import Comp, Item, Job, JobStage, JobStatus, Venue, VisionResult
+from .models import Comp, Condition, Item, Job, JobStage, JobStatus, Venue, VisionResult
 from .pricing import FeeConfig, build_verdict
 from .sources import (
     ApifyClient,
@@ -84,9 +84,7 @@ class Pipeline:
                 timeout_s=self._s.apify_timeout_s,
                 cache_ttl_s=self._s.apify_cache_ttl_hours * 3600,
             )
-            grader = VisionGrader(
-                self._s.anthropic_api_key, self._s.anthropic_model, self._s.vision_concurrency
-            )
+            grader = VisionGrader(self._s)
             await store.ensure_indices()
 
             items = await self._stage_inventory(job, apify)
@@ -136,6 +134,19 @@ class Pipeline:
             [(photo, item.title) for photo, item in zip(photos, items, strict=True)]
         )
         for item, result in zip(items, results, strict=True):
+            # A photo grade beats nothing; the seller's own listed condition
+            # beats a photo grade that came back unknown (no vision configured,
+            # no photo, or a failed call).
+            if (
+                result.condition is Condition.UNKNOWN
+                and item.listed_condition is not Condition.UNKNOWN
+            ):
+                result = result.model_copy(
+                    update={
+                        "condition": item.listed_condition,
+                        "condition_evidence": "From the seller's own listing (no photo grade).",
+                    }
+                )
             item.vision = result
             job.stage.done += 1
 

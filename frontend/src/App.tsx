@@ -138,7 +138,7 @@ export default function App() {
         <p className="pb-5 text-[11px] text-muted/60">
           {health.apify_configured ? "apify ✓" : "apify ✗ (set APIFY_TOKEN)"} ·{" "}
           {health.elastic_configured ? "elastic ✓" : "elastic ✗ (in-memory matching)"} ·{" "}
-          {health.anthropic_configured ? "vision ✓" : "vision ✗ (title-only matching)"}
+          {health.vision_configured ? "vision ✓" : "vision ✗ (title-only matching)"}
         </p>
       )}
 

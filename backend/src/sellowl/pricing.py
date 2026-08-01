@@ -181,6 +181,12 @@ def _reason(kind: VerdictKind, condition: Condition, band: PriceBand, venue: Ven
                 f"Median sold is ${band.p50:,.0f} across {band.n} comps. Sell {where}."
             )
         case VerdictKind.OVERPRICED:
+            if venue is Venue.FB_LOCAL:
+                return (
+                    f"Above the {grade} band (p75 ${band.p75:,.0f}) — eBay buyers won't pay "
+                    f"this. Sell {where} instead, where asking prices run higher than eBay's "
+                    f"median (${band.p50:,.0f})."
+                )
             return (
                 f"Above the {grade} band (p75 ${band.p75:,.0f}). "
                 f"Reduce toward ${band.p50:,.0f} to actually move it."

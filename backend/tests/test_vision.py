@@ -40,6 +40,14 @@ class TestParseVisionJson:
     def test_condition_is_case_insensitive(self) -> None:
         assert parse_vision_json('{"condition": "CLEAN"}').condition is Condition.CLEAN
 
+    def test_condition_synonyms_are_normalized(self) -> None:
+        """Not every vision model sticks to rough/usable/clean — e.g. a
+        general-purpose model answering "new" rather than "clean"."""
+        assert parse_vision_json('{"condition": "new"}').condition is Condition.CLEAN
+        assert parse_vision_json('{"condition": "Brand New"}').condition is Condition.CLEAN
+        assert parse_vision_json('{"condition": "good"}').condition is Condition.USABLE
+        assert parse_vision_json('{"condition": "damaged"}').condition is Condition.ROUGH
+
     def test_garbage_returns_empty_not_raises(self) -> None:
         for text in ("", "not json at all", "{{{", "[]", "null"):
             result = parse_vision_json(text)

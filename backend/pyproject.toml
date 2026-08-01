@@ -12,6 +12,7 @@ dependencies = [
     "elasticsearch[async]>=8.17",
     "anthropic>=0.40",
     "structlog>=26.1.0",
+    "openai>=2.52.0",
 ]
 
 [dependency-groups]

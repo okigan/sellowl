@@ -132,6 +132,13 @@ class TestStoreParsing:
         assert by_id["800284334679"].photo_url.endswith("s-l225.jpg")
         assert by_id["306499332211"].ask_price == 12.0
 
+    def test_parses_the_sellers_own_condition(self) -> None:
+        """Real signal available even without vision — see Item.listed_condition."""
+        items = parse_store_items(load("ebay_store.json"), "https://ebay.com/usr/x", limit=10)
+        by_id = {i.external_id: i for i in items}
+        assert by_id["800284334679"].listed_condition is Condition.CLEAN  # "Brand new"
+        assert by_id["306499332211"].listed_condition is Condition.USABLE  # "Pre-owned"
+
     def test_prefers_numeric_price_over_display_string(self) -> None:
         items = parse_store_items(
             [{"title": "x", "price": "$1,999.00", "priceValue": 12.5}], "s", 5

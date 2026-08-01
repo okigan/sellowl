@@ -79,7 +79,7 @@ export interface Health {
   ok: boolean;
   elastic_configured: boolean;
   apify_configured: boolean;
-  anthropic_configured: boolean;
+  vision_configured: boolean;
   default_store_url: string;
   metro: string;
 }

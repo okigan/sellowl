@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlparse
 
 from ..models import Item
 from .parse import as_price, as_text, as_url, first
+from .sold import condition_from_text
 
 # memo23 emits both a display string ("$14.99") and a numeric `priceValue`.
 # Prefer the number; fall back to parsing the string.
@@ -32,6 +33,9 @@ _PHOTO = (
     "images.0",
 )
 _ID = ("itemId", "listingId", "id", "basic_info.itemId", "legacyItemId")
+# The seller's own condition string ("Pre-owned", "Brand new", ...). Real
+# signal even without vision — see Item.listed_condition.
+_CONDITION = ("condition", "conditionDisplayName", "basic_info.condition")
 
 _SELLER_PATTERNS = (
     re.compile(r"/usr/([^/?#]+)", re.I),
@@ -91,6 +95,7 @@ def parse_store_items(rows: list[dict[str, Any]], store_url: str, limit: int) ->
                 url=url,
                 photo_url=as_url(first(row, *_PHOTO)),
                 store_url=store_url,
+                listed_condition=condition_from_text(as_text(first(row, *_CONDITION))),
             )
         )
         if len(items) >= limit:

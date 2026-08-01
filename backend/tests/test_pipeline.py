@@ -15,7 +15,7 @@ import pytest
 
 from sellowl.config import Settings
 from sellowl.jobs import JobRegistry, Pipeline, revise_payload
-from sellowl.models import Item, JobStatus, VerdictKind
+from sellowl.models import Condition, Item, JobStatus, VerdictKind
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -109,6 +109,17 @@ class TestPipeline:
         assert fan.verdict.target > fan.ask_price
         assert fan.verdict.opportunity_usd is not None
         assert fan.verdict.opportunity_usd > 0
+
+    async def test_condition_falls_back_to_the_sellers_own_listing(
+        self, settings: Settings, patched: FakeApify
+    ) -> None:
+        """Vision is disabled in this fixture, but the store scrape's own
+        "Pre-owned" condition string should still reach the verdict instead of
+        every item defaulting to unknown."""
+        job = await run_job(settings)
+        fan = next(i for i in job.items if i.external_id == "306499332211")
+        assert fan.condition is Condition.USABLE
+        assert fan.vision is not None and fan.vision.condition is Condition.USABLE
 
     async def test_comps_are_attached_for_audit(
         self, settings: Settings, patched: FakeApify

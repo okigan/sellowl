@@ -378,6 +378,29 @@ class TestBuildVerdict:
         assert verdict.opportunity_usd < 0
         assert "Reduce" in verdict.reason
 
+    def test_overpriced_but_local_wins_says_sell_local_not_reduce(self) -> None:
+        """Real hack-night confusion: "overpriced" (vs. eBay sold comps) can
+        co-exist with a positive opportunity and a local recommendation, when
+        local asks run well above the eBay sold median. The copy needs to say
+        so instead of telling the seller to "reduce" toward a price that isn't
+        actually the recommended venue's number.
+        """
+        verdict = build_verdict(
+            ask_price=32.0,
+            sold_prices=[10, 12, 13, 14, 14, 18, 20, 21],
+            local_prices=[45, 48, 50, 50, 52, 55, 58, 60],
+            attributes={},
+            condition=Condition.UNKNOWN,
+            fees=FEES,
+            min_comps=5,
+        )
+        assert verdict.kind is VerdictKind.OVERPRICED
+        assert verdict.recommended_venue is not None
+        assert verdict.recommended_venue.value == "fb_local"
+        assert verdict.opportunity_usd is not None and verdict.opportunity_usd > 0
+        assert "Reduce" not in verdict.reason
+        assert "Sell locally, in person instead" in verdict.reason
+
     def test_no_local_comps_leaves_local_net_none(self) -> None:
         verdict = build_verdict(
             ask_price=100.0,
