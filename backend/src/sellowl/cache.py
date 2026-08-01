@@ -50,6 +50,27 @@ def cache_get(key: str, *, ttl_seconds: float, cache_dir: Path = DEFAULT_CACHE_D
     return envelope["value"]
 
 
+def cache_get_stale(key: str, *, cache_dir: Path = DEFAULT_CACHE_DIR) -> Any | None:
+    """Read a cache entry regardless of age, ignoring the normal TTL.
+
+    For when the live call just failed and something is better than
+    nothing — a platform-level outage or quota limit (not a transient
+    network blip) means retrying won't help, but an entry that's a day
+    stale is still real, previously-successful data. Callers decide when
+    this is the right fallback; this function does not judge freshness.
+    """
+    path = _key_path(cache_dir, key)
+    if not path.exists():
+        return None
+    try:
+        envelope = json.loads(path.read_text())
+    except json.JSONDecodeError, OSError:
+        return None
+    age = time.time() - envelope["cached_at"]
+    log.info("cache_hit_stale", key_digest=path.stem, age_s=round(age))
+    return envelope["value"]
+
+
 def cache_set(key: str, value: Any, *, cache_dir: Path = DEFAULT_CACHE_DIR) -> None:
     cache_dir.mkdir(parents=True, exist_ok=True)
     path = _key_path(cache_dir, key)
