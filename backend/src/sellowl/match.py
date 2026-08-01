@@ -138,7 +138,7 @@ def apply_guards(
     return kept
 
 
-def condition_matched_prices(comps: list[Comp], condition: str) -> list[float]:
+def condition_matched_prices(comps: list[Comp], condition_value: str) -> list[float]:
     """Prices of comps in the same condition bucket.
 
     Falls back to every priced comp when the item's own grade is unknown or
@@ -146,8 +146,10 @@ def condition_matched_prices(comps: list[Comp], condition: str) -> list[float]:
     happened.
     """
     priced = [c for c in comps if c.price is not None and c.price > 0]
-    if condition and condition != "unknown":
-        same = [c.price for c in priced if c.condition.value == condition]
+    if condition_value and condition_value != "unknown":
+        same = [c.price for c in priced if c.condition.value == condition_value]
         if same:
+            # `priced` already guarantees price is not None; filtered again so
+            # mypy can narrow `list[float | None]` to `list[float]`.
             return [p for p in same if p is not None]
     return [c.price for c in priced if c.price is not None]

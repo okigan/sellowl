@@ -12,6 +12,7 @@ from sellowl.pricing import (
     FeeConfig,
     build_verdict,
     classify,
+    local_band_is_trustworthy,
     net_proceeds_ebay,
     net_proceeds_local,
     percentiles,
@@ -111,6 +112,25 @@ class TestShippingEstimate:
         )
 
 
+class TestLocalBandIsTrustworthy:
+    def test_none_is_trusted(self) -> None:
+        assert local_band_is_trustworthy(None, percentiles([25, 35, 89, 120, 50])) is True
+
+    def test_single_comp_is_trusted(self) -> None:
+        sold = percentiles([25, 35, 89, 120, 50])
+        assert local_band_is_trustworthy(percentiles([150]), sold) is True
+
+    def test_tight_local_band_is_trusted(self) -> None:
+        sold = percentiles([25, 35, 89, 120, 50])
+        local = percentiles([195, 200, 205])
+        assert local_band_is_trustworthy(local, sold) is True
+
+    def test_wildly_wider_local_band_is_not_trusted(self) -> None:
+        sold = percentiles([25, 25, 35, 35, 50, 89, 89, 120])
+        local = percentiles([50, 50, 100, 150, 260, 300, 300, 1800])
+        assert local_band_is_trustworthy(local, sold) is False
+
+
 class TestClassify:
     @pytest.fixture
     def band(self):  # type: ignore[no-untyped-def]
@@ -204,6 +224,28 @@ class TestBuildVerdict:
         )
         assert verdict.recommended_venue is not None
         assert verdict.recommended_venue.value == "ebay_sold"
+
+    def test_ignores_a_wildly_scattered_local_band(self) -> None:
+        """Real hack-night case: title-only matching pulled a full water-cooling
+        loop and an unrelated industrial coolant system into the "comps" for a
+        $15 tube, inflating the local median to $150 and the opportunity to
+        +$155. The spread guard should reject that band and fall back to eBay.
+        """
+        verdict = build_verdict(
+            ask_price=15.0,
+            sold_prices=[25, 25, 35, 35, 50, 89, 89, 120],
+            local_prices=[50, 50, 100, 150, 260, 300, 300, 1800],
+            attributes={},
+            condition=Condition.UNKNOWN,
+            fees=FEES,
+            min_comps=5,
+        )
+        assert verdict.recommended_venue is not None
+        assert verdict.recommended_venue.value == "ebay_sold"
+        assert verdict.local_net is None
+        assert verdict.opportunity_usd is not None
+        assert verdict.opportunity_usd < 30.0
+        assert "mismatched" in verdict.reason
 
     def test_ebay_wins_exact_ties(self) -> None:
         """National reach beats a marginal local premium, so ties go to eBay.

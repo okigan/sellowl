@@ -65,6 +65,31 @@ def net_proceeds_local(price: float, fees: FeeConfig) -> float:
     return price * (1.0 - fees.fb_local_rate)
 
 
+# A local ask band this many times "spikier" than the sold band (whose own
+# MIN_COMPS gate already makes it the more trustworthy anchor) is a strong
+# signal that at least one comp is the wrong item, not a real price signal.
+LOCAL_SPREAD_GUARD_MULT = 3.0
+LOCAL_SPREAD_GUARD_FLOOR = 4.0
+
+
+def local_band_is_trustworthy(local_band: PriceBand | None, sold_band: PriceBand) -> bool:
+    """Reject a local band whose spread is implausibly wide vs. sold reality.
+
+    Facebook Marketplace text-matching is noisier than eBay sold comps (which
+    just passed their own MIN_COMPS check): a full water-cooling loop and an
+    industrial coolant system can both match "water cooling tube" on shared
+    vocabulary alone under title-only matching. A single comp for the wrong
+    item must not be allowed to set the recommendation on its own.
+    """
+    if local_band is None or local_band.n < 2:
+        return True  # nothing to compare a single price against
+    if local_band.p25 <= 0:
+        return False
+    local_spread = local_band.p90 / local_band.p25
+    sold_spread = sold_band.p90 / sold_band.p25 if sold_band.p25 > 0 else 1.0
+    return local_spread <= max(LOCAL_SPREAD_GUARD_MULT * sold_spread, LOCAL_SPREAD_GUARD_FLOOR)
+
+
 def classify(ask_price: float | None, band: PriceBand) -> VerdictKind:
     """Where the current ask sits relative to the comp band."""
     if ask_price is None:
@@ -108,7 +133,8 @@ def build_verdict(
 
     shipping = shipping_estimate(attributes)
     ebay_net = net_proceeds_ebay(sold_band.p50, shipping, fees)
-    local_net = net_proceeds_local(local_band.p50, fees) if local_band else None
+    local_trusted = local_band_is_trustworthy(local_band, sold_band)
+    local_net = net_proceeds_local(local_band.p50, fees) if local_band and local_trusted else None
 
     # eBay wins ties: national reach beats a marginal local premium.
     if local_net is not None and local_net > ebay_net:
@@ -125,9 +151,13 @@ def build_verdict(
         current_net = net_proceeds_ebay(ask_price, shipping, fees)
         opportunity = best_net - current_net
 
+    reason = _reason(kind, condition, sold_band, venue)
+    if local_band is not None and not local_trusted:
+        reason += " (Local asks looked scattered/mismatched — ignored for pricing.)"
+
     return Verdict(
         kind=kind,
-        reason=_reason(kind, condition, sold_band, venue),
+        reason=reason,
         sold_band=sold_band,
         local_band=local_band,
         target_low=sold_band.p25,

@@ -44,7 +44,13 @@ def parse_local_comps(rows: list[dict[str, Any]], job_id: str = "") -> list[Comp
                 price=price,
                 url=as_text(first(row, "listingUrl", "listing_url", "url")),
                 photo_url=as_url(
-                    first(row, "primary_listing_photo.image.uri", "image.uri", "photo")
+                    first(
+                        row,
+                        "primary_listing_photo.photo_image_url",
+                        "primary_listing_photo.image.uri",
+                        "image.uri",
+                        "photo",
+                    )
                 ),
                 city=as_text(first(row, "location.reverse_geocode.city", "city")),
                 state=as_text(first(row, "location.reverse_geocode.state", "state")),

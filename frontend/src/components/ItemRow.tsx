@@ -116,6 +116,19 @@ export function ItemRow({ item, index }: { item: Item; index: number }) {
               </p>
             )}
 
+            {verdict?.local_band && (
+              <p className="pb-3 text-[12px] text-muted">
+                <span className="text-muted/60">Local asks: </span>
+                <Band band={verdict.local_band} />
+                {verdict.local_net === null && (
+                  <span className="text-muted/60">
+                    {" "}
+                    — spread too wide to trust, ignored for pricing
+                  </span>
+                )}
+              </p>
+            )}
+
             {item.comps.length === 0 ? (
               <p className="text-[12px] text-muted/60">
                 No comps survived matching. Nothing to price against.

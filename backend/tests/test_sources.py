@@ -255,6 +255,9 @@ class TestConditionFromText:
 
 class TestLocalParsing:
     def test_parses_the_known_shape(self) -> None:
+        """`primary_listing_photo.photo_image_url` is the real, live-captured
+        field — an earlier `image.uri` guess never matched a real actor run
+        and silently produced blank thumbnails for every local comp."""
         comps = parse_local_comps(load("fb_marketplace.json"), job_id="j1")
         by_id = {c.external_id: c for c in comps}
         assert by_id["1189200412268517"].price == 240.0
@@ -262,6 +265,10 @@ class TestLocalParsing:
         assert by_id["1189200412268517"].state == "TX"
         assert by_id["1189200412268517"].photo_url.startswith("https://scontent")
         assert by_id["1189200412268517"].delivery == ["IN_PERSON"]
+
+    def test_falls_back_to_the_older_nested_image_shape(self) -> None:
+        comps = {c.external_id: c for c in parse_local_comps(load("fb_marketplace.json"))}
+        assert comps["890679662817803"].photo_url.startswith("https://scontent")
 
     def test_handles_comma_formatted_price(self) -> None:
         comps = {c.external_id: c for c in parse_local_comps(load("fb_marketplace.json"))}

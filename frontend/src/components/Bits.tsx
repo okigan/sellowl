@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Condition, Verdict, VerdictKind } from "../api";
 import { money } from "../api";
 
@@ -99,7 +100,8 @@ export function Thumb({
   size?: keyof typeof THUMB_SIZE;
 }) {
   const dims = THUMB_SIZE[size];
-  if (!src) {
+  const [failed, setFailed] = useState(false);
+  if (!src || failed) {
     return <div className={`${dims} shrink-0 rounded bg-line`} aria-hidden />;
   }
   return (
@@ -108,9 +110,7 @@ export function Thumb({
       alt={alt}
       loading="lazy"
       className={`${dims} shrink-0 rounded object-cover ring-1 ring-line`}
-      onError={(e) => {
-        (e.currentTarget as HTMLImageElement).style.visibility = "hidden";
-      }}
+      onError={() => setFailed(true)}
     />
   );
 }

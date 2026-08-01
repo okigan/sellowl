@@ -4,10 +4,8 @@
     "listingUrl": "https://www.facebook.com/marketplace/item/1189200412268517",
     "id": "1189200412268517",
     "primary_listing_photo": {
-      "__typename": "ProductImage",
-      "image": {
-        "uri": "https://scontent-hou1-1.xx.fbcdn.net/v/t45.5328-4/437005937.jpg?oe=664AF519"
-      },
+      "__typename": "CatalogMarketplaceEnhancementTransformedImage",
+      "photo_image_url": "https://scontent-hou1-1.xx.fbcdn.net/v/t39.84726-6/437005937.jpg?oe=664AF519",
       "id": "3853471898214198"
     },
     "listing_price": {
