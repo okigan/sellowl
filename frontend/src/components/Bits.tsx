@@ -83,16 +83,31 @@ export function VenueTag({ venue }: { venue: string | null }) {
   );
 }
 
-export function Thumb({ src, alt }: { src: string; alt: string }) {
+const THUMB_SIZE = {
+  sm: "h-10 w-10",
+  lg: "h-16 w-16",
+  xl: "h-20 w-20",
+} as const;
+
+export function Thumb({
+  src,
+  alt,
+  size = "sm",
+}: {
+  src: string;
+  alt: string;
+  size?: keyof typeof THUMB_SIZE;
+}) {
+  const dims = THUMB_SIZE[size];
   if (!src) {
-    return <div className="h-10 w-10 shrink-0 rounded bg-line" aria-hidden />;
+    return <div className={`${dims} shrink-0 rounded bg-line`} aria-hidden />;
   }
   return (
     <img
       src={src}
       alt={alt}
       loading="lazy"
-      className="h-10 w-10 shrink-0 rounded object-cover ring-1 ring-line"
+      className={`${dims} shrink-0 rounded object-cover ring-1 ring-line`}
       onError={(e) => {
         (e.currentTarget as HTMLImageElement).style.visibility = "hidden";
       }}
@@ -104,14 +119,14 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
 export function SkeletonRow() {
   return (
     <tr className="border-b border-line/60">
-      <td className="px-3 py-2.5">
+      <td className="px-3 py-3">
         <div className="flex items-center gap-3">
-          <div className="skeleton h-10 w-10 rounded" />
+          <div className="skeleton h-20 w-20 rounded" />
           <div className="skeleton h-3 w-48 rounded" />
         </div>
       </td>
       {Array.from({ length: 5 }).map((_, i) => (
-        <td key={i} className="px-3 py-2.5">
+        <td key={i} className="px-3 py-3">
           <div className="skeleton h-3 w-16 rounded" />
         </td>
       ))}

@@ -6,9 +6,9 @@ import { Band, ConditionChip, Opportunity, Thumb, VenueTag, VerdictChip } from "
 function CompRow({ comp }: { comp: Comp }) {
   return (
     <tr className="text-[12px]">
-      <td className="py-1.5 pl-3 pr-2">
+      <td className="py-2.5 pl-3 pr-2">
         <div className="flex items-center gap-2">
-          <Thumb src={comp.photo_url} alt="" />
+          <Thumb src={comp.photo_url} alt="" size="lg" />
           <a
             href={comp.url || undefined}
             target="_blank"
@@ -19,19 +19,19 @@ function CompRow({ comp }: { comp: Comp }) {
           </a>
         </div>
       </td>
-      <td className="px-2 py-1.5">
+      <td className="px-2 py-2.5">
         <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-muted">
           {comp.venue === "ebay_sold" ? "sold" : "asking"}
         </span>
       </td>
-      <td className="px-2 py-1.5">{money(comp.price)}</td>
-      <td className="px-2 py-1.5">
+      <td className="px-2 py-2.5">{money(comp.price)}</td>
+      <td className="px-2 py-2.5">
         <ConditionChip condition={comp.condition} evidence={comp.condition_evidence} />
       </td>
-      <td className="px-2 py-1.5 text-muted">
+      <td className="px-2 py-2.5 text-muted">
         {comp.city ? `${comp.city}${comp.state ? `, ${comp.state}` : ""}` : "—"}
       </td>
-      <td className="px-2 py-1.5 text-right text-muted/70">{comp.score.toFixed(3)}</td>
+      <td className="px-2 py-2.5 text-right text-muted/70">{comp.score.toFixed(3)}</td>
     </tr>
   );
 }
@@ -48,7 +48,7 @@ export function ItemRow({ item, index }: { item: Item; index: number }) {
         style={{ animationDelay: `${Math.min(index, 12) * 25}ms` }}
         onClick={() => setOpen((v) => !v)}
       >
-        <td className="px-3 py-2.5">
+        <td className="px-3 py-3">
           <div className="flex items-center gap-3">
             <span
               className={`text-muted/50 transition-transform ${open ? "rotate-90" : ""}`}
@@ -56,7 +56,7 @@ export function ItemRow({ item, index }: { item: Item; index: number }) {
             >
               ›
             </span>
-            <Thumb src={item.photo_url} alt="" />
+            <Thumb src={item.photo_url} alt="" size="xl" />
             <div className="min-w-0">
               <div className="truncate max-w-[22rem] text-[13px]">{item.title}</div>
               <div className="flex items-center gap-2 pt-0.5">
@@ -69,11 +69,11 @@ export function ItemRow({ item, index }: { item: Item; index: number }) {
             </div>
           </div>
         </td>
-        <td className="px-3 py-2.5 text-[13px]">{money(item.ask_price)}</td>
-        <td className="px-3 py-2.5 text-[13px]">
+        <td className="px-3 py-3 text-[13px]">{money(item.ask_price)}</td>
+        <td className="px-3 py-3 text-[13px]">
           <Band band={verdict?.sold_band ?? null} />
         </td>
-        <td className="px-3 py-2.5 text-[13px]">
+        <td className="px-3 py-3 text-[13px]">
           {verdict?.target ? (
             <span>
               {money(verdict.target)}
@@ -86,10 +86,10 @@ export function ItemRow({ item, index }: { item: Item; index: number }) {
             <span className="text-muted/50">—</span>
           )}
         </td>
-        <td className="px-3 py-2.5">
+        <td className="px-3 py-3">
           <VenueTag venue={verdict?.recommended_venue ?? null} />
         </td>
-        <td className="px-3 py-2.5 text-right text-[13px]">
+        <td className="px-3 py-3 text-right text-[13px]">
           <Opportunity verdict={verdict} />
         </td>
       </tr>
