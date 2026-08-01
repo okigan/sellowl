@@ -81,25 +81,7 @@ export function ItemRow({ item, index }: { item: Item; index: number }) {
           <Band band={verdict?.sold_band ?? null} />
         </td>
         <td className="px-3 py-3 text-[13px]">
-          {verdict?.target ? (
-            <span>
-              {money(verdict.target)}
-              <span className="text-muted/70 text-[11px]">
-                {" "}
-                ({money(verdict.target_low)}–{money(verdict.target_high)})
-              </span>
-              {verdict.recommended_venue === "fb_local" && (
-                <span
-                  className="ml-1 text-[10px] text-muted/60"
-                  title="This target is from local asks, not the eBay sold band shown to the left."
-                >
-                  local
-                </span>
-              )}
-            </span>
-          ) : (
-            <span className="text-muted/50">—</span>
-          )}
+          <Band band={verdict?.local_band ?? null} />
         </td>
         <td className="px-3 py-3">
           <VenueTag venue={verdict?.recommended_venue ?? null} />
@@ -132,7 +114,7 @@ export function ItemRow({ item, index }: { item: Item; index: number }) {
                   verdict.recommended_venue === "fb_local" ? verdict.local_net : verdict.ebay_net,
                 )}{" "}
                 selling {verdict.recommended_venue === "fb_local" ? "locally" : "on eBay"} at the
-                target — the gap is the opportunity number.
+                median of the range above — the gap is the opportunity number.
               </p>
             )}
 
@@ -143,16 +125,10 @@ export function ItemRow({ item, index }: { item: Item; index: number }) {
               </p>
             )}
 
-            {verdict?.local_band && (
-              <p className="pb-3 text-[12px] text-muted">
-                <span className="text-muted/60">Local asks: </span>
-                <Band band={verdict.local_band} />
-                {verdict.local_net === null && (
-                  <span className="text-muted/60">
-                    {" "}
-                    — spread too wide to trust, ignored for pricing
-                  </span>
-                )}
+            {verdict?.local_band && verdict.local_net === null && (
+              <p className="pb-3 text-[12px] text-muted/60">
+                The FB range shown above looked too scattered to trust (spread far wider than the
+                eBay range) — ignored for pricing.
               </p>
             )}
 

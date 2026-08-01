@@ -179,8 +179,8 @@ export default function App() {
               <tr className="border-b border-line bg-panel text-left text-[10px] uppercase tracking-wide text-muted/70">
                 <th className="px-3 py-2 font-medium">Listing</th>
                 <th className="px-3 py-2 font-medium">You ask</th>
-                <th className="px-3 py-2 font-medium">Sold band</th>
-                <th className="px-3 py-2 font-medium">Target</th>
+                <th className="px-3 py-2 font-medium">eBay range</th>
+                <th className="px-3 py-2 font-medium">FB range</th>
                 <th className="px-3 py-2 font-medium">Where</th>
                 <th className="px-3 py-2 text-right font-medium">Opportunity</th>
               </tr>
@@ -207,8 +207,9 @@ export default function App() {
 
       {items.length > 0 && (
         <p className="pt-4 text-[11px] text-muted/50">
-          Sold bands are eBay completed sales; local figures are asking prices, not sales. Fees and
-          shipping are estimates. Click any row to see the comps behind the number.
+          eBay range is completed sales; FB range is local asking prices, not sales — discounted for
+          expected negotiation before it's compared to eBay. Fees and shipping are estimates. Click
+          any row to see the comps behind the number.
         </p>
       )}
     </div>
