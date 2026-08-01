@@ -5,8 +5,31 @@ import { ItemRow } from "./components/ItemRow";
 import { SkeletonRow } from "./components/Bits";
 
 const POLL_MS = 2000;
+const THEME_KEY = "sellowl-theme";
+
+type Theme = "dark" | "light";
+
+function initialTheme(): Theme {
+  const stored = window.localStorage.getItem(THEME_KEY);
+  if (stored === "dark" || stored === "light") return stored;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function ThemeToggle({ theme, onToggle }: { theme: Theme; onToggle: () => void }) {
+  return (
+    <button
+      onClick={onToggle}
+      title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+      aria-label="Toggle color theme"
+      className="rounded-md border border-line px-2.5 py-2 text-[13px] text-muted transition hover:text-text"
+    >
+      {theme === "dark" ? "☀️" : "🌙"}
+    </button>
+  );
+}
 
 export default function App() {
+  const [theme, setTheme] = useState<Theme>(initialTheme);
   const [health, setHealth] = useState<Health | null>(null);
   const [storeUrl, setStoreUrl] = useState("");
   const [metro, setMetro] = useState("austin");
@@ -14,6 +37,11 @@ export default function App() {
   const [items, setItems] = useState<Item[]>([]);
   const [error, setError] = useState("");
   const timer = useRef<number | undefined>(undefined);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", theme === "dark");
+    window.localStorage.setItem(THEME_KEY, theme);
+  }, [theme]);
 
   useEffect(() => {
     api
@@ -67,13 +95,19 @@ export default function App() {
 
   return (
     <div className="mx-auto max-w-6xl px-5 py-8">
-      <header className="pb-6">
-        <h1 className="text-xl font-semibold tracking-tight">
-          <span aria-hidden>🦉</span> SellOwl
-        </h1>
-        <p className="pt-1 text-[13px] text-muted">
-          Paste an eBay store link. Find out what you&rsquo;re leaving on the table.
-        </p>
+      <header className="flex items-start justify-between gap-4 pb-6">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">
+            <span aria-hidden>🦉</span> SellOwl
+          </h1>
+          <p className="pt-1 text-[13px] text-muted">
+            Paste an eBay store link. Find out what you&rsquo;re leaving on the table.
+          </p>
+        </div>
+        <ThemeToggle
+          theme={theme}
+          onToggle={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+        />
       </header>
 
       <div className="flex flex-wrap items-center gap-2 pb-2">
@@ -82,19 +116,19 @@ export default function App() {
           onChange={(e) => setStoreUrl(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && !running && void start()}
           placeholder="https://www.ebay.com/usr/…"
-          className="min-w-[22rem] flex-1 rounded-md border border-line bg-panel px-3 py-2 text-[13px] outline-none placeholder:text-muted/50 focus:border-white/25"
+          className="min-w-[22rem] flex-1 rounded-md border border-line bg-panel px-3 py-2 text-[13px] outline-none placeholder:text-muted/50 focus:border-overlay-focus"
         />
         <input
           value={metro}
           onChange={(e) => setMetro(e.target.value)}
           placeholder="metro"
           title="Facebook Marketplace metro — local comps come from here"
-          className="w-32 rounded-md border border-line bg-panel px-3 py-2 text-[13px] outline-none focus:border-white/25"
+          className="w-32 rounded-md border border-line bg-panel px-3 py-2 text-[13px] outline-none focus:border-overlay-focus"
         />
         <button
           onClick={() => void start()}
           disabled={running || !storeUrl}
-          className="rounded-md bg-white px-4 py-2 text-[13px] font-medium text-ink transition hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-md bg-accent-surface px-4 py-2 text-[13px] font-medium text-accent-text transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {running ? "Working…" : "Analyze"}
         </button>
@@ -125,7 +159,7 @@ export default function App() {
           {running && (
             <span className="h-1 w-24 overflow-hidden rounded-full bg-line">
               <span
-                className="block h-full bg-white/40 transition-all duration-500"
+                className="block h-full bg-overlay-strong transition-all duration-500"
                 style={{ width: `${job.total ? (job.done / job.total) * 100 : 15}%` }}
               />
             </span>

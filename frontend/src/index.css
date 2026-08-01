@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
-/* Dark by default — it demos better in a dim room. */
+/* Dark by default — it demos better in a dim room. Light is opt-in via the
+   toggle in the header, which flips the `dark` class on <html>. */
 @theme {
   --color-ink: #0b0d10;
   --color-panel: #14181d;
@@ -11,6 +12,34 @@
   --color-money: #4ade80;
   --color-warn: #fbbf24;
   --color-bad: #f87171;
+  /* The Analyze button and other "always inverted" surfaces — kept separate
+     from ink/text so they read correctly in both themes without coupling. */
+  --color-accent-surface: #ffffff;
+  --color-accent-text: #0b0d10;
+  /* Subtle fills/borders that used to be literal white/black at low opacity. */
+  --color-overlay-1: rgb(255 255 255 / 0.05);
+  --color-overlay-2: rgb(255 255 255 / 0.1);
+  --color-overlay-hover: rgb(255 255 255 / 0.025);
+  --color-overlay-strong: rgb(255 255 255 / 0.4);
+  --color-overlay-focus: rgb(255 255 255 / 0.25);
+}
+
+html:not(.dark) {
+  --color-ink: #f7f8fa;
+  --color-panel: #ffffff;
+  --color-line: #dde2e8;
+  --color-muted: #5b6572;
+  --color-text: #12161b;
+  --color-money: #16a34a;
+  --color-warn: #b45309;
+  --color-bad: #dc2626;
+  --color-accent-surface: #12161b;
+  --color-accent-text: #ffffff;
+  --color-overlay-1: rgb(0 0 0 / 0.04);
+  --color-overlay-2: rgb(0 0 0 / 0.08);
+  --color-overlay-hover: rgb(0 0 0 / 0.03);
+  --color-overlay-strong: rgb(0 0 0 / 0.3);
+  --color-overlay-focus: rgb(0 0 0 / 0.2);
 }
 
 html,
@@ -58,7 +87,7 @@ body {
   position: absolute;
   inset: 0;
   transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.06), transparent);
+  background: linear-gradient(90deg, transparent, var(--color-overlay-1), transparent);
   animation: shimmer 1.4s infinite;
 }
 

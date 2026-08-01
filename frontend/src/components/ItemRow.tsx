@@ -20,7 +20,7 @@ function CompRow({ comp }: { comp: Comp }) {
         </div>
       </td>
       <td className="px-2 py-2.5">
-        <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-muted">
+        <span className="rounded bg-overlay-1 px-1.5 py-0.5 text-[10px] text-muted">
           {comp.venue === "ebay_sold" ? "sold" : "asking"}
         </span>
       </td>
@@ -44,7 +44,7 @@ export function ItemRow({ item, index }: { item: Item; index: number }) {
   return (
     <>
       <tr
-        className="row-in cursor-pointer border-b border-line/60 hover:bg-white/[0.025]"
+        className="row-in cursor-pointer border-b border-line/60 hover:bg-overlay-hover"
         style={{ animationDelay: `${Math.min(index, 12) * 25}ms` }}
         onClick={() => setOpen((v) => !v)}
       >

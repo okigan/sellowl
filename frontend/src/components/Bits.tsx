@@ -6,7 +6,7 @@ const CONDITION_STYLE: Record<Condition, string> = {
   clean: "bg-emerald-500/10 text-emerald-300 ring-emerald-500/25",
   usable: "bg-sky-500/10 text-sky-300 ring-sky-500/25",
   rough: "bg-amber-500/10 text-amber-300 ring-amber-500/25",
-  unknown: "bg-white/5 text-muted ring-white/10",
+  unknown: "bg-overlay-1 text-muted ring-overlay-2",
 };
 
 export function ConditionChip({ condition, evidence }: { condition: Condition; evidence?: string }) {
