@@ -9,7 +9,8 @@ half plan, half build log.
 |---|---|
 | `SqliteCompStore` behind the existing `CompStore` protocol | **Done** (`sqlite_store.py`) |
 | Run side-by-side behind a config flag | **Done** (`SEARCH_BACKEND=elastic\|sqlite`) |
-| Compare match quality on the same store, then flip the default | **Not started** |
+| Compare match quality on the same store | **Done — inconclusive, see below** |
+| Flip the default | **Not done, and not yet justified** |
 | Anything touching Apify | Not started |
 
 ## What shipped for the Elastic migration
@@ -35,12 +36,14 @@ half plan, half build log.
   no CUDA in the image. The model is baked in at build time so the first
   request isn't a download.
 
-**Why a container rather than the existing local model server:** nvbox
-proxies only `/v1/chat/completions`, `/v1/messages` and
-`/v1/images/generations` — it has no embeddings route, so loading an
-embedding model there would leave no way to call it. That is expected to
-change; when it does, switching is one env var (`EMBEDDING_BASE_URL`),
-because `OpenAIEmbedder` doesn't care which server answers.
+**On where embeddings come from:** the container was built when the local
+nvbox server exposed no embeddings route at all (only chat/completions,
+messages and images), which would have left an embedding model loaded there
+with no way to call it. nvbox has since gained `/v1/embeddings` and serves
+`bge-small-en-v1.5` directly, so that is what the app points at now — one env
+var, no code change, because `OpenAIEmbedder` doesn't care which server
+answers. The container stays as the offline/CI path and as the answer to
+"what if there's no model server".
 
 **One correctness note worth not losing:** bge/e5-family models are
 *asymmetric* — the query side wants an instruction prefix, the document side
@@ -48,7 +51,45 @@ does not. Embedding both identically still returns results, just quietly
 worse ones, so `Embedder` separates `embed` from `embed_query` rather than
 leaving each call site to remember.
 
-## Why this might matter later
+## The side-by-side comparison (run it: `uv run python scripts/compare_backends.py`)
+
+Both stores get the **identical** comp set and identical queries. That control
+matters: the live `sellowl-comps` index has accumulated comps from every job
+ever run while a fresh SQLite file has only the current job's, so comparing
+two live pipeline runs would measure that asymmetry rather than retrieval.
+
+Retrieval agreement is low — **58% of top-8 slots shared, top-1 identical 50%
+of the time**. But overlap is not quality: neither backend is ground truth, so
+that number says only that they disagree. The decision-relevant measure is
+whether a *seller would be told something different*, so the harness runs the
+real downstream path (guards → bucketing → verdict) on each backend's comps:
+
+- **Coverage is identical:** 12/12 usable verdicts from both. SQLite is not
+  starving the pricing stage.
+- **Verdict kind agrees 7–8 of 12 (58–67%)** — and that range is not
+  rounding: re-running the harness on identical inputs moves the number,
+  because near-tied RRF scores reorder and change which comps clear the
+  bucketing thresholds. The comparison is itself noisy at this sample size,
+  which is its own argument against reading much into a single run.
+- **Of the four disagreements, neither backend wins.** SQLite is clearly
+  right on one (expandable sleeving: $6 vs Elastic's $40 for a ~$9 item),
+  Elastic is clearly right on another (Apricorn 4GB: $20 vs SQLite's $41,
+  against a $13–17 band seen in prior runs), and on the other two **both are
+  implausible** — a $7 AmazonBasics USB-C adapter priced at $40/$70, a $7
+  RCA cable at $50/$32.
+
+**The most useful thing this found is not about the backend.** Two of four
+disagreements are cases where *both* stores retrieve comps that are obviously
+the wrong product, which means the dominant error source is matching (a
+1-to-2 RCA cable drawing $50 comps), not retrieval. Swapping the search
+engine cannot fix that, and a comparison that had only looked at overlap
+would have missed it entirely. See § What isn't attribute-gated yet.
+
+**Conclusion: do not flip the default on this evidence.** SQLite is viable —
+same coverage, faster, no cluster, no vendor syntax — but "different in a
+third of verdicts, with no quality edge either way" is not a reason to
+switch, and the disagreements point at a matching problem that should be
+fixed first so the comparison isn't measuring noise on both sides.
 
 ## Why this might matter later
 
