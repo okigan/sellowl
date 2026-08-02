@@ -64,6 +64,13 @@ class Embedder(Protocol):
         unrelated pairs sit around 0.55 and related ones above 0.65, while
         hashed n-grams occupy a completely different range. A single global
         constant would be right for at most one embedder.
+
+        The bge default (0.65) was measured, not guessed: across a real
+        12-item store it costs *zero* sold comps while excluding same-brand
+        different-product matches (an "Aegis Padlock 3.0" portable drive
+        scoring 0.632 against an "Aegis Secure Key" flash drive, where every
+        genuine comp scored 0.684+). 0.68 was rejected -- it starts taking
+        real comps and pushes a thin item below MIN_COMPS.
         """
         ...
 
@@ -141,7 +148,7 @@ class OpenAIEmbedder:
         model: str,
         dim: int = EMBED_DIM,
         query_prefix: str = QUERY_PREFIX,
-        floor: float = 0.62,
+        floor: float = 0.65,
     ) -> None:
         self._client = client
         self._model = model
