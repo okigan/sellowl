@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     scrape_min_interval_s: float = 8.0
     scrape_settle_ms: int = 2500
     scrape_headless: bool = False
+    scrape_stealth: bool = True
     # Persistent browser profile. Its real purpose: eBay puts sold/completed
     # listings behind a login, so a human can sign in once by hand and have
     # the session stick. The app never handles credentials.
@@ -128,6 +129,9 @@ class Settings(BaseSettings):
     # http://embeddings:8080/v1, and a local model server works the same way.
     # If nothing answers, retrieval degrades to the hashing embedder rather
     # than failing; /health reports which one is actually configured.
+    # Short on purpose: there is a working local fallback, so a dead endpoint
+    # should cost a moment rather than stall the job behind SDK retries.
+    embedding_timeout_s: float = 10.0
     embedding_base_url: str = "http://localhost:8080/v1"
     embedding_api_key: str = ""
     embedding_model: str = "bge-small-en-v1.5"

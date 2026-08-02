@@ -69,6 +69,13 @@ def make_embedder(settings: Settings) -> Embedder:
             AsyncOpenAI(
                 base_url=settings.embedding_base_url,
                 api_key=settings.embedding_api_key or "unused",
+                # Fail fast and fall back. The SDK's default retry/timeout
+                # budget assumes a call worth waiting for; here there is a
+                # working local fallback, so a dead endpoint should cost a
+                # moment, not stall the job. An unreachable server turned a
+                # 24-query corpus check into minutes of retries.
+                timeout=settings.embedding_timeout_s,
+                max_retries=1,
             ),
             settings.embedding_model,
         )

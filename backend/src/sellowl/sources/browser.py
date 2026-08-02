@@ -14,10 +14,13 @@ version of "faster" here that is worth getting the IP blocked for.
 Known limits, both structural rather than bugs to fix later:
 
 - **Sold listings require a signed-in eBay account.** `/sch/...&LH_Sold=1`
-  redirects to "Sign in or Register". Sold comps are the load-bearing half of
-  this app's pricing, so this matters: without a session, this source can
-  supply a seller's own listings but not the completed sales to price them
-  against. The context is persistent (`scrape_profile_dir`) precisely so a
+  redirects to "Sign in or Register". Worth being precise about, because it
+  looks like a bot block and isn't: *without* stealth eBay answers with
+  "Security Measure | eBay", *with* stealth the same request reaches the
+  genuine sign-in page. Anti-detection gets you to the wall, not through it.
+  Sold comps are the load-bearing half of this app's pricing, so this
+  matters: without a session, this source can supply a seller's own listings
+  but not the completed sales to price them against. The context is persistent (`scrape_profile_dir`) precisely so a
   human can log in once, by hand, and have it stick -- this code never
   handles credentials.
 - **Facebook Marketplace is not implemented here.** It is login-walled and
@@ -113,8 +116,19 @@ class BrowserScraper:
             self._ctx = await self._browser.new_context(
                 locale="en-US", viewport={"width": 1440, "height": 900}, user_agent=_UA
             )
-        # The single most effective anti-detection measure available here, and
-        # the only one worth having: don't advertise automation.
+        # playwright-stealth patches the handful of properties that give a
+        # driven browser away (navigator.webdriver, chrome runtime, plugin and
+        # codec lists, ...). Measured, not cargo-culted: without it eBay
+        # answers a sold-listings request with "Security Measure | eBay"; with
+        # it the same request reaches the real "Sign in or Register" page. It
+        # defeats the bot check -- it cannot defeat an auth requirement.
+        if self._s.scrape_stealth:
+            try:
+                from playwright_stealth import Stealth
+
+                await Stealth().apply_stealth_async(self._ctx)
+            except Exception as exc:  # noqa: BLE001 - stealth is an optimisation
+                log.warning("stealth_unavailable", error=str(exc))
         await self._ctx.add_init_script(
             "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"
         )
