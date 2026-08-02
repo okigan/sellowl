@@ -14,6 +14,8 @@ built in a test has defaults plus exactly what that test passed.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from sellowl.config import Settings
@@ -24,12 +26,17 @@ _LEAKY_ENV_VARS = tuple(f.upper() for f in Settings.model_fields)
 
 
 @pytest.fixture(autouse=True)
-def isolate_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+def isolate_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setitem(Settings.model_config, "env_file", None)
     for name in _LEAKY_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
-    # Clearing env vars is not enough for this one: the *code* default points
-    # at a real embeddings endpoint, so tests would try to reach it (and wait
-    # out its retries -- this took the suite from 2s to 86s). Tests declare
-    # "no embedding server" and get the built-in lexical embedder.
+    # Clearing env vars is not enough for these two: the *code* defaults point
+    # at real resources, so tests inherit them by doing nothing wrong.
+    #
+    # An embeddings endpoint tests would dial and wait out the retries of
+    # (2s -> 86s suite), and the live comp store, which tests both read (a
+    # 4000-comp cosine scan per call) and *write* -- a fixture comp was found
+    # sitting in the real corpus. A test must not be able to corrupt the data
+    # the app serves.
     monkeypatch.setenv("EMBEDDING_BASE_URL", "")
+    monkeypatch.setenv("SQLITE_DB_PATH", str(tmp_path / "comps.db"))
