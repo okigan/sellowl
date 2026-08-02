@@ -20,9 +20,9 @@ Known limits, both structural rather than bugs to fix later:
   genuine sign-in page. Anti-detection gets you to the wall, not through it.
   Sold comps are the load-bearing half of this app's pricing, so this
   matters: without a session, this source can supply a seller's own listings
-  but not the completed sales to price them against. The context is persistent (`scrape_profile_dir`) precisely so a
-  human can log in once, by hand, and have it stick -- this code never
-  handles credentials.
+  but not the completed sales to price them against. The context is
+  persistent (`scrape_profile_dir`) precisely so a human can log in once, by
+  hand, and have it stick -- this code never handles credentials.
 - **Facebook Marketplace is not implemented here.** It is login-walled and
   heavily JS-driven; pretending otherwise would mean silently returning no
   local comps. It returns empty and says so, which the pipeline already
