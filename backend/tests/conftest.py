@@ -28,3 +28,8 @@ def isolate_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(Settings.model_config, "env_file", None)
     for name in _LEAKY_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+    # Clearing env vars is not enough for this one: the *code* default points
+    # at a real embeddings endpoint, so tests would try to reach it (and wait
+    # out its retries -- this took the suite from 2s to 86s). Tests declare
+    # "no embedding server" and get the built-in lexical embedder.
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "")

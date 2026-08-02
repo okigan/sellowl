@@ -14,7 +14,7 @@
 | Frontend | React 19 + TypeScript + Vite |
 | Styling | Tailwind |
 | E2E | Playwright — intended, never built (see below) |
-| Search | Elastic Serverless (cloud), local ES via optional compose profile |
+| Search | SQLite FTS5 + embeddings (default); Elastic Serverless optional |
 
 ## Where code goes
 
@@ -73,7 +73,12 @@ services:
     environment: [VITE_API_BASE=http://localhost:8000]
     volumes: ["./frontend/src:/app/src"]
 
-  # optional: docker compose --profile local-es up
+  # vectors for the default sqlite backend
+  embeddings:
+    build: ./embeddings
+    ports: ["8080:8080"]
+
+  # optional, offline only: docker compose --profile local-es up
   elasticsearch:
     profiles: ["local-es"]
     image: docker.elastic.co/elasticsearch/elasticsearch:9.0.0
@@ -82,10 +87,12 @@ services:
       - xpack.security.enabled=false
 ```
 
-Default path is **Elastic Serverless in the cloud** — that's what the hackathon
-provisions and what `semantic_text` works on without deploying a model. The
-local profile exists for offline work; note that `semantic_text` needs an
-inference endpoint configured, so local is not a drop-in substitute.
+Retrieval defaults to the self-hosted SQLite backend, so no cluster is needed
+to run the app. The Elastic path is still supported (`SEARCH_BACKEND=elastic`)
+and expects Elastic Serverless, since `semantic_text` relies on managed
+inference; the local-ES compose profile is for offline work only and is not a
+drop-in substitute, because `semantic_text` needs an inference endpoint
+configured.
 
 ## Commands
 

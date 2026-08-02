@@ -3,10 +3,10 @@
 Ordered so that there is something demoable at every point. If the clock runs
 out, whatever is checked off still runs.
 
-**Status: phases 0–5 and 7 shipped; the hack-night submission is in.** What
-follows is kept as the build log — the checked boxes are what actually got
-built, and the notes under them record where the plan and the code diverged.
-Open work is collected under *Now* at the bottom.
+**Status: phases 0–5 and 7 shipped; the hack night is over.** What follows is
+kept as the build log — the checked boxes are what actually got built, and the
+notes under them record where the plan and the code diverged. Open work is
+collected under *Now* at the bottom.
 
 ## Phase 0 — De-risk (do this first, ~15 min, timeboxed hard)
 
@@ -112,7 +112,7 @@ Goal: paste a store URL → see a table of your own listings. No comps yet.
 
 ## Now — open work
 
-Post-hackathon, in rough priority order:
+In rough priority order:
 
 - [ ] **Calibrate the numeric-spec exponents.** `NUMERIC_SPEC_POLICIES` ships
       0.6 capacity / 0.9 pack count / 0.35 length. The *ordering* is sound;
@@ -126,7 +126,9 @@ Post-hackathon, in rough priority order:
 - [ ] Evict from `sellowl-comps`, or scope retrieval by job — the index grows
       unbounded across every job ever run.
 - [ ] Deploy (see phase 6).
-- [ ] Migrate off Apify/Elastic — see MIGRATION.md.
+- [x] Migrate off Elastic — done; `SEARCH_BACKEND=sqlite` is the default.
+- [ ] Migrate off Apify — see MIGRATION.md. eBay has an official API; Facebook
+      Marketplace does not, and that leg needs a product decision first.
 
 ## Later
 

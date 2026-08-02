@@ -2,8 +2,6 @@
 
 **Paste your eBay store link. Find out what you're leaving on the table.**
 
-Built for the Apify × Elastic Hack Night.
-
 SellOwl reads a seller's eBay store, finds out what similar items actually
 sell for — on eBay and locally on Facebook Marketplace — and tells the
 seller, item by item, whether they're underpriced, overpriced, or fair, and
@@ -37,9 +35,8 @@ Three sources, joined on *meaning*, not keywords:
 
 Those three sources use completely incompatible schemas and vocabularies
 ("vintage bowl green" vs. "green ceramic bowl, vintage"), so everything gets
-indexed into Elasticsearch and matched with hybrid search — keyword (BM25)
-fused with semantic embeddings — so a fuzzy title still finds the right
-comps. Percentile price bands are computed per matched-condition cluster,
+indexed and matched with hybrid search — keyword (BM25) fused with semantic
+embeddings — so a fuzzy title still finds the right comps. Percentile price bands are computed per matched-condition cluster,
 and a fee-aware venue comparison (eBay's cut + shipping vs. a free local
 meetup) picks the venue that actually nets more money.
 
@@ -63,7 +60,26 @@ meetup) picks the venue that actually nets more money.
   take minutes and repeat identical `(actor, payload)` calls across
   re-analyses of the same store
 
-## What we used from Elastic
+## Search backend
+
+Retrieval defaults to a **self-hosted SQLite backend** — FTS5 for BM25 plus
+brute-force cosine over embeddings, fused with RRF. No cluster to run or pay
+for, and at this scale (hundreds of comps per job) a full vector scan is
+milliseconds.
+
+Embeddings come from any OpenAI-compatible `/v1/embeddings` endpoint
+(`bge-small-en-v1.5` by default, with a container in `embeddings/`). With no
+endpoint reachable, retrieval degrades to a built-in lexical embedder and
+`/health` reports `lexical` so the downgrade is visible rather than silent.
+
+**Elasticsearch is still fully supported** (`SEARCH_BACKEND=elastic`) and is
+what the project originally ran on. The default moved for cost, not quality:
+a side-by-side on identical comps found no retrieval edge in either
+direction — see [docs/MIGRATION.md](docs/MIGRATION.md), and
+`backend/scripts/compare_backends.py` to re-run it.
+
+<details>
+<summary>What the original Apify × Elastic Hack Night entry used from Elastic</summary>
 
 - **Elasticsearch** as the comp store — every scraped sold/local listing is
   indexed as a document (title, price, condition, city, photo, sold/asking)
@@ -81,6 +97,8 @@ meetup) picks the venue that actually nets more money.
 - **Bulk API** for indexing comps, and a keyword/`copy_to` mapping so
   matched documents can be re-scored and filtered by venue and condition
   after retrieval
+
+</details>
 
 ## Stack
 

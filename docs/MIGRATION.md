@@ -1,16 +1,15 @@
 # Migration off Apify and Elastic
 
-**Status: Elastic migration started (step 1 of 3 done). Apify migration is
-still planning-only.** SellOwl was built for the Apify × Elastic Hack Night
-and the submitted entry genuinely uses both end to end; this document is now
-half plan, half build log.
+**Status: Elastic migration done. Apify migration is still planning-only.**
+The project originally ran on both end to end; this document is now half
+build log, half plan for the half that hasn't moved.
 
 | Step | State |
 |---|---|
 | `SqliteCompStore` behind the existing `CompStore` protocol | **Done** (`sqlite_store.py`) |
 | Run side-by-side behind a config flag | **Done** (`SEARCH_BACKEND=elastic\|sqlite`) |
 | Compare match quality on the same store | **Done — inconclusive, see below** |
-| Flip the default | **Not done, and not yet justified** |
+| Flip the default | **Done** — `sqlite`, on cost |
 | Anything touching Apify | Not started |
 
 ## What shipped for the Elastic migration
@@ -85,11 +84,22 @@ the wrong product, which means the dominant error source is matching (a
 engine cannot fix that, and a comparison that had only looked at overlap
 would have missed it entirely. See § What isn't attribute-gated yet.
 
-**Conclusion: do not flip the default on this evidence.** SQLite is viable —
-same coverage, faster, no cluster, no vendor syntax — but "different in a
-third of verdicts, with no quality edge either way" is not a reason to
-switch, and the disagreements point at a matching problem that should be
-fixed first so the comparison isn't measuring noise on both sides.
+**Outcome: the default is now `sqlite`, decided on cost rather than on
+quality.** The evidence above does not say SQLite retrieves better — it says
+the two are indistinguishable in aggregate at this sample size. What it does
+establish is that SQLite is *not worse*: identical coverage (12/12 usable
+verdicts), no failures, faster, no cluster to run or pay for. Given no
+quality edge in either direction, "stop paying for a hosted cluster" is a
+sufficient reason, and it is the actual reason — worth stating plainly so
+nobody later mistakes this for a benchmark win.
+
+Elastic stays fully supported and one env var away (`SEARCH_BACKEND=elastic`);
+nothing about the hack-night entry stopped working.
+
+**The matching problem is untouched by this** and is the higher-value fix: in
+two of four disagreements *both* backends retrieved obviously-wrong products.
+That is a matching failure, not a retrieval one, and swapping search engines
+could never have fixed it. See § What isn't attribute-gated yet.
 
 ## Why this might matter later
 
@@ -212,10 +222,9 @@ comparable difficulty.
 
 ## What this doc is not
 
-Not a timeline, not a commitment, and not a reason to touch anything before
-the hack night judging concludes. The actual next step, if this becomes a
-priority, is a spike: stand up `PgVectorCompStore` (or the embedded
-`MemoryCompStore` extension) behind the existing protocol and compare
-result quality against `ElasticCompStore` on the same store data — that
-spike is small, reversible, and doesn't require deciding the Apify question
-at all.
+Not a timeline and not a commitment for the Apify half, which remains
+unstarted. The eBay leg of that is the tractable piece (an official API
+exists); Facebook Marketplace has no official API and any replacement is
+still a scraper we would then own, so whether local comps stay an Apify
+dependency — or whether the "sell locally" venue comparison is worth its
+cost at all — is a product decision, not just an engineering one.

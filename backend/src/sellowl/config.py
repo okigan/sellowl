@@ -87,18 +87,28 @@ class Settings(BaseSettings):
     fb_ask_discount: float = 0.85
 
     # --- search backend --------------------------------------------------
-    # "elastic" (default, what the hack-night entry ships) or "sqlite" (the
-    # self-hosted path in docs/MIGRATION.md: FTS5 BM25 + brute-force vectors,
-    # no cluster). Both implement the same CompStore protocol, so this is the
-    # only switch needed to compare them on the same store.
-    search_backend: str = "elastic"
+    # "sqlite" (default: FTS5 BM25 + brute-force vectors, no cluster) or
+    # "elastic" (what the hack-night entry shipped). Both implement the same
+    # CompStore protocol, so this is the only switch between them.
+    #
+    # The default moved to sqlite to stop paying for a hosted cluster, NOT
+    # because it retrieves better: the side-by-side found no quality edge in
+    # either direction (docs/MIGRATION.md). Elastic stays fully supported.
+    search_backend: str = "sqlite"
     sqlite_db_path: str = ".cache/comps.db"
-    # Embeddings for the sqlite backend. Blank base_url uses the built-in
-    # dependency-free hashing embedder -- see embeddings.py for why that is a
-    # deliberately lexical stand-in and not a claim of semantics.
-    embedding_base_url: str = ""
+    # Embeddings for the sqlite backend. Real vectors are the default: the
+    # hashing fallback is lexical, and shipping a lexical default would mean
+    # the common case quietly gets the weakest retrieval.
+    #
+    # Points at this repo's own embeddings container
+    # (`docker compose --profile selfhosted up embeddings`). Override to any
+    # OpenAI-compatible server -- inside compose the service is reachable as
+    # http://embeddings:8080/v1, and a local model server works the same way.
+    # If nothing answers, retrieval degrades to the hashing embedder rather
+    # than failing; /health reports which one is actually configured.
+    embedding_base_url: str = "http://localhost:8080/v1"
     embedding_api_key: str = ""
-    embedding_model: str = ""
+    embedding_model: str = "bge-small-en-v1.5"
 
     # --- elastic ---------------------------------------------------------
     index_prefix: str = "sellowl"

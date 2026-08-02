@@ -5,6 +5,13 @@ services:
     env_file: .env
     volumes:
       - ./backend/src:/app/src
+    environment:
+      # Service name, not localhost: the backend reaches it over the compose
+      # network. .env still wins if it sets its own endpoint.
+      EMBEDDING_BASE_URL: http://embeddings:8080/v1
+    depends_on:
+      embeddings:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
@@ -22,11 +29,10 @@ services:
     depends_on:
       - backend
 
-  # Vectors for SEARCH_BACKEND=sqlite. Started only with
-  # `docker compose --profile selfhosted up`, because the default (Elastic)
-  # path doesn't need it. See docs/MIGRATION.md.
+  # Vectors for the sqlite search backend, which is the default. Not
+  # profile-gated: the default config points here, so gating it would mean
+  # `docker compose up` produces a stack whose defaults don't work.
   embeddings:
-    profiles: ["selfhosted"]
     build: ./embeddings
     ports: ["8080:8080"]
     healthcheck:

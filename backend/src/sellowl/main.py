@@ -69,11 +69,16 @@ async def health() -> dict[str, object]:
         "search_backend": ("sqlite" if settings.search_backend == "sqlite" else "elastic")
         if settings.search_backend == "sqlite" or settings.elastic_configured
         else "in-memory",
+        # Say "lexical" out loud rather than showing nothing: with no
+        # embedding server configured, retrieval falls back to hashed
+        # n-grams, a real quality difference a user could not otherwise see.
+        # (This reports what is *configured*; an endpoint that is configured
+        # but unreachable degrades at call time and logs once.)
         "embedding_model": (
-            settings.embedding_model
-            if settings.search_backend == "sqlite" and settings.embedding_base_url
-            else ""
-        ),
+            (settings.embedding_model or "lexical") if settings.embedding_base_url else "lexical"
+        )
+        if settings.search_backend == "sqlite"
+        else "",
         "apify_configured": bool(settings.apify_token),
         "vision_configured": settings.vision_configured,
         "default_store_url": settings.default_store_url,

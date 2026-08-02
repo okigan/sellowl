@@ -129,6 +129,7 @@ class OpenAIEmbedder:
         self._dim = dim
         self._query_prefix = query_prefix
         self._fallback = HashingEmbedder(dim)
+        self._warned = False
 
     @property
     def dim(self) -> int:
@@ -140,7 +141,15 @@ class OpenAIEmbedder:
         try:
             response = await self._client.embeddings.create(model=self._model, input=texts)
         except Exception as exc:  # noqa: BLE001 - retrieval must degrade, not die
-            log.warning("embedding_call_failed_using_fallback", error=str(exc))
+            # Once, not once per batch: an unreachable endpoint would other-
+            # wise bury the log, and the message is identical every time.
+            if not self._warned:
+                self._warned = True
+                log.warning(
+                    "embedding_endpoint_unavailable_falling_back_to_lexical",
+                    model=self._model,
+                    error=str(exc),
+                )
             return await self._fallback.embed(texts)
         vectors = [_normalize(list(item.embedding)) for item in response.data]
         if vectors and len(vectors[0]) != self._dim:
