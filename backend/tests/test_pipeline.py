@@ -14,9 +14,9 @@ from typing import Any, cast
 import pytest
 
 from sellowl.config import Settings
-from sellowl.sources import ApifyCompSource
 from sellowl.jobs import JobRegistry, Pipeline, revise_payload
 from sellowl.models import Condition, Item, JobStatus, VerdictKind
+from sellowl.sources import ApifyCompSource
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
