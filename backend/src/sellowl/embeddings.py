@@ -170,6 +170,7 @@ class OpenAIEmbedder:
         self._floor = floor
         self._fallback = HashingEmbedder(dim)
         self._warned = False
+        self._degraded = False
 
     @property
     def dim(self) -> int:
@@ -177,7 +178,14 @@ class OpenAIEmbedder:
 
     @property
     def relevance_floor(self) -> float:
-        return self._floor
+        # Follow the vector space we are actually producing. Falling back to
+        # the hashing embedder changes the scale completely -- bge's unrelated
+        # pairs sit near 0.55, hashed n-grams near 0.03 -- so continuing to
+        # report the bge floor after a fallback rejected *every* comp on a
+        # live run and turned a whole store into "insufficient data". A
+        # fallback that silently keeps the old threshold is worse than no
+        # fallback, because it fails quietly and looks like bad matching.
+        return self._fallback.relevance_floor if self._degraded else self._floor
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
@@ -194,14 +202,17 @@ class OpenAIEmbedder:
         except Exception as exc:  # noqa: BLE001 - retrieval must degrade, not die
             # Once, not once per batch: an unreachable endpoint would other-
             # wise bury the log, and the message is identical every time.
+            self._degraded = True
             if not self._warned:
                 self._warned = True
                 log.warning(
                     "embedding_endpoint_unavailable_falling_back_to_lexical",
                     model=self._model,
                     error=str(exc),
+                    floor_now=self._fallback.relevance_floor,
                 )
             return await self._fallback.embed(texts)
+        self._degraded = False
         vectors = [_normalize(list(item.embedding)) for item in response.data]
         if vectors and len(vectors[0]) != self._dim:
             self._dim = len(vectors[0])

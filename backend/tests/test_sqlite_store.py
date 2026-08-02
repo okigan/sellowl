@@ -206,3 +206,28 @@ class TestHashingEmbedder:
 
     async def test_empty_input(self) -> None:
         assert await HashingEmbedder().embed([]) == []
+
+
+class TestDegradedEmbedderFloor:
+    """A fallback that changes the vector space must change the threshold
+    with it. This one didn't, and it silently rejected every comp on a live
+    run -- a whole store came back "insufficient data" while the logs showed
+    only a single warning about the endpoint."""
+
+    async def test_floor_follows_the_fallback(self) -> None:
+        from openai import AsyncOpenAI
+
+        from sellowl.embeddings import HashingEmbedder, OpenAIEmbedder
+
+        # An endpoint that cannot answer -> every embed() degrades.
+        embedder = OpenAIEmbedder(
+            AsyncOpenAI(base_url="http://127.0.0.1:1/v1", api_key="x", max_retries=0),
+            "bge-small-en-v1.5",
+        )
+        assert embedder.relevance_floor == 0.65, "bge scale before any call"
+
+        vectors = await embedder.embed(["teak sideboard"])
+        assert vectors, "must still return usable vectors"
+        assert embedder.relevance_floor == HashingEmbedder().relevance_floor, (
+            "after falling back to lexical vectors the floor must be the lexical one"
+        )
