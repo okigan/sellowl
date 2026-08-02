@@ -113,10 +113,13 @@ class Pipeline:
     async def run(self, job: Job) -> None:
         """Full pipeline. Any failure marks the job failed with a real message."""
         structlog.contextvars.bind_contextvars(job_id=job.job_id)
+        # Both are created before the try so the finally can always close
+        # them -- binding `source` inside would make cleanup raise NameError
+        # on the very failures it exists to clean up after.
         store = make_store(self._s)
+        source = make_source(self._s)
         try:
             job.status = JobStatus.RUNNING
-            source = make_source(self._s)
             grader = VisionGrader(self._s)
             await store.ensure_indices()
 
@@ -135,6 +138,16 @@ class Pipeline:
             job.error = f"{type(exc).__name__}: {exc}"
         finally:
             await store.close()
+            # The browser source owns a real Chromium and a single-writer
+            # profile lock. Leaving it open leaked a browser per job and made
+            # the *next* job fail on the lock -- and the failure surfaced as a
+            # profile-in-use error that reads like the user's fault.
+            closer = getattr(source, "close", None)
+            if closer is not None:
+                try:
+                    await closer()
+                except Exception as exc:  # noqa: BLE001 - cleanup must not mask the real error
+                    log.warning("source_close_failed", error=str(exc))
             structlog.contextvars.unbind_contextvars("job_id")
 
     # --- stages ----------------------------------------------------------
