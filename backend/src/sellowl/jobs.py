@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Coroutine
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -25,14 +26,12 @@ from .models import Comp, Condition, Item, Job, JobStage, JobStatus, Venue, Visi
 from .pricing import FeeConfig, build_verdict
 from .sightings import record_sightings
 from .sources import (
-    ApifyClient,
+    ApifyCompSource,
+    CompSource,
     fetch_bytes,
-    local_actor_payload,
     parse_local_comps,
     parse_sold_comps,
     parse_store_items,
-    sold_actor_payload,
-    store_actor_payload,
     upstream_error,
 )
 from .sqlite_store import SqliteCompStore
@@ -54,6 +53,12 @@ def make_store(settings: Settings) -> CompStore:
         )
     log.warning("elastic_not_configured", fallback="in-memory matching (demo will be weaker)")
     return MemoryCompStore()
+
+
+def make_source(settings: Settings) -> CompSource:
+    """Only one implementation today; see sources/protocol.py for why the two
+    other legs are not equally replaceable."""
+    return ApifyCompSource(settings)
 
 
 def make_embedder(settings: Settings) -> Embedder:
@@ -102,17 +107,13 @@ class Pipeline:
         store = make_store(self._s)
         try:
             job.status = JobStatus.RUNNING
-            apify = ApifyClient(
-                self._s.apify_token,
-                timeout_s=self._s.apify_timeout_s,
-                cache_ttl_s=self._s.apify_cache_ttl_hours * 3600,
-            )
+            source = make_source(self._s)
             grader = VisionGrader(self._s)
             await store.ensure_indices()
 
-            items = await self._stage_inventory(job, apify)
+            items = await self._stage_inventory(job, source)
             await self._stage_vision(job, grader, items)
-            comps = await self._stage_comps(job, apify, items, store)
+            comps = await self._stage_comps(job, source, items, store)
             await self._stage_index(job, store, comps)
             await self._stage_match(job, store, grader, items)
 
@@ -129,13 +130,9 @@ class Pipeline:
 
     # --- stages ----------------------------------------------------------
 
-    async def _stage_inventory(self, job: Job, apify: ApifyClient) -> list[Item]:
+    async def _stage_inventory(self, job: Job, source: CompSource) -> list[Item]:
         job.stage = JobStage(name="scraping_store", detail=job.store_url)
-        rows = await apify.run_actor(
-            self._s.actor_store,
-            store_actor_payload(job.store_url, self._s.max_items),
-            max_items=self._s.max_items,
-        )
+        rows = await source.store_listings(job.store_url, self._s.max_items)
         items = parse_store_items(rows, job.store_url, self._s.max_items)
         if not items:
             reported = upstream_error(rows)
@@ -222,7 +219,7 @@ class Pipeline:
         return len(fresh) >= self._s.rerank_top_k
 
     async def _stage_comps(
-        self, job: Job, apify: ApifyClient, items: list[Item], store: CompStore
+        self, job: Job, source: CompSource, items: list[Item], store: CompStore
     ) -> list[Comp]:
         """One actor run per query, bounded, and only for what we lack.
 
@@ -245,12 +242,14 @@ class Pipeline:
         job.stage = JobStage(name="finding_comps", total=len(wanted) - len(skip))
         gate = asyncio.Semaphore(self._s.comp_concurrency)
 
-        async def one(actor: str, payload: dict[str, Any], limit: int) -> list[dict[str, Any]]:
+        async def one(
+            kind: str, fetch: Coroutine[Any, Any, list[dict[str, Any]]]
+        ) -> list[dict[str, Any]]:
             async with gate:
                 try:
-                    return await apify.run_actor(actor, payload, max_items=limit)
+                    return await fetch
                 except Exception as exc:  # noqa: BLE001 - one dead query must not kill the job
-                    log.warning("comp_run_failed", actor=actor, error=str(exc))
+                    log.warning("comp_run_failed", kind=kind, error=str(exc))
                     return []
                 finally:
                     job.stage.done += 1
@@ -259,17 +258,9 @@ class Pipeline:
         sold_queries = [q for q in queries if (q, Venue.EBAY_SOLD) not in skip]
         local_queries = [q for q in queries if (q, Venue.FB_LOCAL) not in skip]
         sold_runs = [
-            one(
-                self._s.actor_sold,
-                sold_actor_payload(q, limit, self._s.sold_days_back),
-                limit,
-            )
-            for q in sold_queries
+            one("sold", source.sold_comps(q, limit, self._s.sold_days_back)) for q in sold_queries
         ]
-        local_runs = [
-            one(self._s.actor_local, local_actor_payload(job.metro, q, limit), limit)
-            for q in local_queries
-        ]
+        local_runs = [one("local", source.local_comps(job.metro, q, limit)) for q in local_queries]
 
         results = await asyncio.gather(*sold_runs, *local_runs)
         sold_rows = [row for batch in results[: len(sold_queries)] for row in batch]

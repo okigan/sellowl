@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from sellowl.config import Settings
+from sellowl.sources import ApifyCompSource
 from sellowl.jobs import JobRegistry, Pipeline, revise_payload
 from sellowl.models import Condition, Item, JobStatus, VerdictKind
 
@@ -67,7 +68,12 @@ def settings() -> Settings:
 @pytest.fixture
 def patched(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> FakeApify:
     fake = FakeApify(ebay=settings.actor_store, local=settings.actor_local)
-    monkeypatch.setattr("sellowl.jobs.ApifyClient", lambda *a, **k: fake)
+    # Wrap the fake transport in the real ApifyCompSource so the actor slugs
+    # and payload shapes stay under test -- patching the source out entirely
+    # would stop exercising the code that builds them.
+    monkeypatch.setattr(
+        "sellowl.jobs.make_source", lambda s: ApifyCompSource(s, client=cast(Any, fake))
+    )
 
     async def no_photos(url: str, **kwargs: Any) -> None:
         return None
@@ -142,17 +148,17 @@ class TestPipeline:
         fake = FakeApify(ebay=settings.actor_store, local=settings.actor_local)
         import sellowl.jobs as jobs_mod
 
-        original_client, original_fetch = jobs_mod.ApifyClient, jobs_mod.fetch_bytes
+        original_source, original_fetch = jobs_mod.make_source, jobs_mod.fetch_bytes
 
         async def no_photos(url: str, **kwargs: Any) -> None:
             return None
 
-        jobs_mod.ApifyClient = lambda *a, **k: fake  # type: ignore[assignment]
+        jobs_mod.make_source = lambda s: ApifyCompSource(s, client=cast(Any, fake))  # type: ignore[assignment]
         jobs_mod.fetch_bytes = no_photos  # type: ignore[assignment]
         try:
             await Pipeline(settings, registry).run(job)
         finally:
-            jobs_mod.ApifyClient = original_client  # type: ignore[assignment]
+            jobs_mod.make_source = original_source  # type: ignore[assignment]
             jobs_mod.fetch_bytes = original_fetch  # type: ignore[assignment]
 
         n_items = len(job.items)
@@ -178,7 +184,9 @@ class TestPipeline:
             local=settings.actor_local,
             fail={settings.actor_local},
         )
-        monkeypatch.setattr("sellowl.jobs.ApifyClient", lambda *a, **k: fake)
+        monkeypatch.setattr(
+            "sellowl.jobs.make_source", lambda s: ApifyCompSource(s, client=cast(Any, fake))
+        )
 
         async def no_photos(url: str, **kwargs: Any) -> None:
             return None
@@ -194,7 +202,9 @@ class TestPipeline:
             async def run_actor(self, *a: Any, **k: Any) -> list[dict[str, Any]]:
                 return []
 
-        monkeypatch.setattr("sellowl.jobs.ApifyClient", lambda *a, **k: Empty())
+        monkeypatch.setattr(
+            "sellowl.jobs.make_source", lambda s: ApifyCompSource(s, client=cast(Any, Empty()))
+        )
         job = await run_job(settings)
         assert job.status is JobStatus.FAILED
         assert "ACTOR_STORE" in job.error or "no parseable" in job.error

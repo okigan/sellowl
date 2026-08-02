@@ -1,5 +1,7 @@
 from .apify import ApifyClient, ApifyError, fetch_bytes
+from .apify_source import ApifyCompSource
 from .local import local_actor_payload, parse_local_comps, search_url
+from .protocol import CompSource
 from .sold import condition_from_text, parse_sold_comps, sold_actor_payload, sold_search_url
 from .store import (
     parse_store_items,
@@ -11,7 +13,9 @@ from .store import (
 
 __all__ = [
     "ApifyClient",
+    "ApifyCompSource",
     "ApifyError",
+    "CompSource",
     "condition_from_text",
     "fetch_bytes",
     "local_actor_payload",
