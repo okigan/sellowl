@@ -16,7 +16,7 @@ import structlog
 from openai import AsyncOpenAI
 
 from .config import Settings
-from .embeddings import Embedder, HashingEmbedder, OpenAIEmbedder
+from .embeddings import PHOTO_FLOOR_RATIO, Embedder, HashingEmbedder, OpenAIEmbedder, cosine
 from .index import CompStore, ElasticCompStore, MemoryCompStore
 from .logging import get_logger
 from .match import apply_guards, matched_prices, specs_from_text
@@ -87,6 +87,7 @@ class Pipeline:
     def __init__(self, settings: Settings, registry: JobRegistry) -> None:
         self._s = settings
         self._registry = registry
+        self._embedder = make_embedder(settings)
         self._fees = FeeConfig(
             ebay_fvf_rate=settings.ebay_fvf_rate,
             ebay_fixed_fee=settings.ebay_fixed_fee,
@@ -266,6 +267,7 @@ class Pipeline:
             # Rerank: vision only over survivors. Grading every comp would be
             # ~500 calls; this is ~top_k per venue, and cached across items.
             found = await self._rerank(found, grader, graded)
+            found = await self._drop_photo_mismatches(vision, found)
             found = apply_guards(
                 found,
                 item_attrs=vision.attributes,
@@ -301,6 +303,37 @@ class Pipeline:
                 days_listed=item.days_listed,
             )
             job.stage.done += 1
+
+    async def _drop_photo_mismatches(self, vision: VisionResult, comps: list[Comp]) -> list[Comp]:
+        """Second relevance pass, this time using what the comp's photo showed.
+
+        Retrieval can only match on what was indexed, and comps are indexed
+        before their photos are graded -- so a listing titled "Electronics
+        Kit" scores well against "Makeblock Inventor Electronic Kit" on text
+        alone. The rerank stage then looks at its photo, correctly reports "a
+        precision screwdriver set in a tool case", and until now that finding
+        was used for condition and attributes but never allowed to reject the
+        comp. We were paying for the photo and ignoring what it said.
+
+        Applied only where a comp actually has a vision description: a comp
+        that was never graded is missing information, not a mismatch, which
+        is the same rule the attribute guards follow.
+        """
+        graded = [c for c in comps if c.description]
+        mine = vision.canonical_description
+        if not graded or not mine:
+            return comps
+
+        query = await self._embedder.embed_query(mine)
+        vectors = await self._embedder.embed([c.description for c in graded])
+        # A looser bar than retrieval's: see PHOTO_FLOOR_RATIO.
+        floor = self._embedder.relevance_floor * PHOTO_FLOOR_RATIO
+        rejected = {
+            c.doc_id for c, v in zip(graded, vectors, strict=True) if cosine(query, v) < floor
+        }
+        if rejected:
+            log.info("comps_rejected_on_photo", count=len(rejected), floor=floor)
+        return [c for c in comps if c.doc_id not in rejected]
 
     async def _rerank(
         self, comps: list[Comp], grader: VisionGrader, cache: dict[str, VisionResult]

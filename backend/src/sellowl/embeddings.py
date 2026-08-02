@@ -47,6 +47,19 @@ _WORD_RE = re.compile(r"[a-z0-9]+")
 # to each caller to remember. Empty for symmetric models.
 QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
+# The photo check compares two *vision descriptions* of two objects, which is
+# a different question from the retrieval floor's "query vs listing title",
+# and it sits on a different part of the similarity scale. Reusing the
+# retrieval floor here threw away five genuine expandable-sleeving comps
+# because two honest descriptions of the same product still differ in wording
+# more than a title does.
+#
+# This floor exists to catch "that is a different OBJECT" -- a screwdriver set
+# retrieved for a robotics kit measures 0.51, while real matches sit at 0.68+.
+# It is deliberately not tight enough to police model variants; the retrieval
+# floor already does that, with the corpus in front of it.
+PHOTO_FLOOR_RATIO = 0.85
+
 
 class Embedder(Protocol):
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
