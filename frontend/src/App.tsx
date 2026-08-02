@@ -137,7 +137,17 @@ export default function App() {
       {health && (
         <p className="pb-5 text-[11px] text-muted/60">
           {health.apify_configured ? "apify ✓" : "apify ✗ (set APIFY_TOKEN)"} ·{" "}
-          {health.elastic_configured ? "elastic ✓" : "elastic ✗ (in-memory matching)"} ·{" "}
+          <span
+            title={
+              health.embedding_model
+                ? `Retrieval: ${health.search_backend}, embeddings: ${health.embedding_model}`
+                : `Retrieval: ${health.search_backend}`
+            }
+          >
+            search: {health.search_backend}
+            {health.embedding_model ? ` + ${health.embedding_model}` : ""}
+          </span>{" "}
+          ·{" "}
           {health.vision_configured ? "vision ✓" : "vision ✗ (title-only matching)"}
         </p>
       )}

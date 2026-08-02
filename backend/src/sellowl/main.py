@@ -62,6 +62,18 @@ async def health() -> dict[str, object]:
     return {
         "ok": True,
         "elastic_configured": settings.elastic_configured,
+        # What retrieval is *actually* running, not merely what's configured.
+        # Having Elastic credentials in .env says nothing about whether the
+        # job used Elastic -- SEARCH_BACKEND decides that, and a status line
+        # showing "elastic ✓" during a SQLite run is a status line that lies.
+        "search_backend": ("sqlite" if settings.search_backend == "sqlite" else "elastic")
+        if settings.search_backend == "sqlite" or settings.elastic_configured
+        else "in-memory",
+        "embedding_model": (
+            settings.embedding_model
+            if settings.search_backend == "sqlite" and settings.embedding_base_url
+            else ""
+        ),
         "apify_configured": bool(settings.apify_token),
         "vision_configured": settings.vision_configured,
         "default_store_url": settings.default_store_url,

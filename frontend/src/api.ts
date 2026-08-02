@@ -100,6 +100,8 @@ export interface JobStatus {
 export interface Health {
   ok: boolean;
   elastic_configured: boolean;
+  search_backend: string;
+  embedding_model: string;
   apify_configured: boolean;
   vision_configured: boolean;
   default_store_url: string;
@@ -158,7 +160,7 @@ export const STAGE_COPY: Record<string, string> = {
   scraping_store: "Reading your store",
   reading_photos: "Looking at photos",
   finding_comps: "Hunting comps",
-  indexing: "Indexing to Elastic",
+  indexing: "Indexing comps",
   matching: "Matching and pricing",
   done: "Done",
 };
