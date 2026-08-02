@@ -20,18 +20,21 @@
 
 ```
 sellowl/
-  docs/            GOAL.md DESIGN.md TODO.md DEVELOP.md
+  docs/            GOAL.md DESIGN.md TODO.md DEVELOP.md MIGRATION.md
   backend/
     pyproject.toml
     src/sellowl/
       main.py          FastAPI app, routes
       config.py        pydantic-settings, all env
-      jobs.py          background job orchestration + state in ES
-      sources/         apify_store.py apify_sold.py apify_local.py
-      vision.py        Claude vision -> structured JSON
-      index.py         ES mappings, bulk upsert
-      match.py         RRF retrieval + drift guards
+      jobs.py          background job orchestration + in-process job state
+      sources/         apify.py (client) + store.py sold.py local.py parse.py
+      vision.py        photo -> structured JSON (Anthropic or OpenAI-compatible)
+      index.py         ES mappings, bulk upsert, hit -> Comp
+      match.py         RRF retrieval + drift guards + numeric-spec scaling
       pricing.py       ← pure functions. percentiles -> verdict. mutation-tested.
+      sightings.py     durable first-seen ledger -> days a listing has sat
+      cache.py         TTL disk cache (apify + vision namespaces)
+      logging.py       structlog setup
       models.py        pydantic models shared across the pipeline
     tests/
   frontend/
@@ -39,10 +42,23 @@ sellowl/
       App.tsx
       components/
       api.ts
-    e2e/             Playwright, later
   compose.yaml
   Makefile
 ```
+
+Two things that were planned differently and are worth knowing:
+
+- **Job and item state is an in-process dict** (`jobs.JobRegistry`), not an
+  Elasticsearch index. Only `sellowl-comps` exists in the cluster. A restart
+  mid-job orphans it; that's the accepted trade (see DESIGN.md § Jobs).
+- **`sightings.py` is not part of `cache.py`** despite the similar shape. The
+  cache is disposable and TTL'd (`DELETE /api/cache` wipes it); the sightings
+  ledger is the only record that a listing existed before today, and losing
+  it silently resets every item's age to zero.
+
+Playwright/e2e is in the stack table as an intention. **It was never built** —
+there is no `frontend/e2e/`. Coverage is backend pytest (including
+Hypothesis property tests in `test_invariants.py`) plus `tsc --noEmit`.
 
 `pricing.py` is deliberately pure and dependency-free: aggregation numbers and
 config in, verdict out. No I/O, no LLM, no Elasticsearch. That's what makes it
@@ -84,7 +100,7 @@ make dev          # compose up, backend + frontend, hot reload
 make check        # ruff format --check && ruff check && mypy && pytest
 make fix          # ruff format && ruff check --fix
 make mutate       # mutmut run, scoped to pricing.py + match.py
-make e2e          # playwright, once tier 1 is green
+make e2e          # placeholder — no Playwright suite exists yet, this fails
 ```
 
 Run `make check` before every commit. It's fast enough that there's no excuse.
@@ -115,7 +131,17 @@ Target: no surviving mutants in `pricing.py`. `match.py` best-effort.
 **Testing approach.** Record one real response from each Apify actor into
 `tests/fixtures/` and replay it. Never hit live actors from tests — they cost
 money and they're flaky. The fixtures double as documentation of the actual
-output shapes, which the actor READMEs get wrong.
+output shapes, which the actor READMEs get wrong. HTTP-level Apify behaviour
+(retries, the stale-cache fallback) is mocked with `respx`.
+
+**Property tests for the "is this answer sane at all" class of bug.**
+`tests/test_invariants.py` fuzzes `build_verdict` with Hypothesis over its
+whole input space, asserting things no correct recommendation may ever do:
+an opportunity larger than every price in play, a shipping estimate several
+times the item's own value, a stale-trimmed target below the observed band.
+Golden-case tests only catch scenarios someone thought to write down — a
+$7 cable with a hallucinated $140 shipping estimate wasn't one of them, and
+it shipped a fabricated "+$138 opportunity" to the UI as a result.
 
 ## Design language
 

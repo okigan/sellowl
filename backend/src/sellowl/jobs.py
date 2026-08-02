@@ -16,9 +16,10 @@ import structlog
 from .config import Settings
 from .index import CompStore, ElasticCompStore, MemoryCompStore
 from .logging import get_logger
-from .match import apply_guards, capacity_from_text, matched_prices
+from .match import apply_guards, matched_prices, specs_from_text
 from .models import Comp, Condition, Item, Job, JobStage, JobStatus, Venue, VisionResult
 from .pricing import FeeConfig, build_verdict
+from .sightings import record_sightings
 from .sources import (
     ApifyClient,
     fetch_bytes,
@@ -123,8 +124,14 @@ class Pipeline:
                 f"{self._s.actor_store} returned {len(rows)} rows but no parseable listings. "
                 "Check the actor output shape, or switch ACTOR_STORE in .env."
             )
+        # How long each listing has been sitting. eBay's search output has no
+        # "listed on" date, so age is measured from the first time this app
+        # saw the listing -- worthless on a store's first analysis, real
+        # signal on every one after it.
+        ages = record_sightings(job.store_url, [i.external_id for i in items])
         for item in items:
             item.job_id = job.job_id
+            item.days_listed = ages.get(item.external_id)
         job.items = items
         return items
 
@@ -149,14 +156,14 @@ class Pipeline:
                     }
                 )
             # Vision extraction has run-to-run variance on whether it surfaces
-            # a `capacity` attribute at all; the title usually states it
-            # plainly, so fall back to reading it straight from there.
-            if "capacity" not in result.attributes:
-                found = capacity_from_text(item.title)
-                if found:
-                    result = result.model_copy(
-                        update={"attributes": {**result.attributes, "capacity": found}}
-                    )
+            # the numeric spec attributes at all; the title usually states
+            # them plainly, so fall back to reading them straight from there.
+            # Vision wins wherever it did produce a value.
+            found = {
+                k: v for k, v in specs_from_text(item.title).items() if k not in result.attributes
+            }
+            if found:
+                result = result.model_copy(update={"attributes": {**result.attributes, **found}})
             item.vision = result
             job.stage.done += 1
 
@@ -271,6 +278,7 @@ class Pipeline:
                 min_comps=self._s.min_comps,
                 sold_tier=sold_matched.tier,
                 local_tier=local_matched.tier,
+                days_listed=item.days_listed,
             )
             job.stage.done += 1
 
@@ -293,10 +301,11 @@ class Pipeline:
                 out.append(comp)
                 continue
             attributes = graded.attributes
-            if "capacity" not in attributes:
-                found = capacity_from_text(comp.title)
-                if found:
-                    attributes = {**attributes, "capacity": found}
+            from_title = {
+                k: v for k, v in specs_from_text(comp.title).items() if k not in attributes
+            }
+            if from_title:
+                attributes = {**attributes, **from_title}
             out.append(
                 comp.model_copy(
                     update={

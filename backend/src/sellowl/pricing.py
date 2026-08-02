@@ -129,6 +129,35 @@ def local_band_is_trustworthy(local_band: PriceBand | None, sold_band: PriceBand
     return local_spread <= max(LOCAL_SPREAD_GUARD_MULT * sold_spread, LOCAL_SPREAD_GUARD_FLOOR)
 
 
+# Days unsold before the listing's own age counts as evidence about price.
+# Below this it's just normal time-on-market; above it, the market has had a
+# fair look at this price and declined.
+STALE_AFTER_DAYS = 30
+# Age at which the recommendation has moved all the way from the band median
+# to its 25th percentile. Between the two thresholds it slides linearly.
+VERY_STALE_DAYS = 90
+
+
+def staleness_pull(days_listed: int | None) -> float:
+    """How far to move the target from the band median toward its p25.
+
+    0.0 = no pull (fresh, or age unknown), 1.0 = all the way to p25.
+
+    Time on market is real evidence and the comps can't see it: a listing
+    that has sat unsold for months is not priced at what this market pays,
+    however comfortable it looks against the band. But it's *soft* evidence
+    -- a bad photo or a bad title stalls a correctly-priced listing too --
+    so it moves the recommendation within the range real sales already
+    support rather than inventing a number below all of them.
+    """
+    if days_listed is None or days_listed <= STALE_AFTER_DAYS:
+        return 0.0
+    if days_listed >= VERY_STALE_DAYS:
+        return 1.0
+    span = VERY_STALE_DAYS - STALE_AFTER_DAYS
+    return (days_listed - STALE_AFTER_DAYS) / span
+
+
 def classify(ask_price: float | None, band: PriceBand) -> VerdictKind:
     """Where the current ask sits relative to the comp band."""
     if ask_price is None:
@@ -151,12 +180,16 @@ def build_verdict(
     min_comps: int,
     sold_tier: str = "condition",
     local_tier: str = "condition",
+    days_listed: int | None = None,
 ) -> Verdict:
     """Turn matched comp prices into a recommendation.
 
     `sold_prices`/`local_prices` should already be filtered by the caller
     (see `match.matched_prices`); this function does not re-filter, it only
     reports the condition and bucket tier it was told about.
+
+    `days_listed` is how long this listing has sat unsold, when known -- see
+    `staleness_pull`.
     """
     sold_band = percentiles(sold_prices)
     local_band = percentiles(local_prices)
@@ -207,6 +240,19 @@ def build_verdict(
     # (where asks run $50) contradicted the recommendation on its face.
     target_band = local_band if venue is Venue.FB_LOCAL and local_band is not None else sold_band
 
+    # Time on market pulls the recommendation down within the band the comps
+    # already support -- never below it. See `staleness_pull`.
+    pull = staleness_pull(days_listed)
+    # Written as a weighted average rather than `p50 - pull * (p50 - p25)`:
+    # the subtractive form is off by ~1e-14 at full pull and can land a hair
+    # *below* p25, breaking the "never below the observed band" guarantee.
+    target = target_band.p50 * (1.0 - pull) + target_band.p25 * pull
+    if pull > 0.0 and days_listed is not None:
+        reason += (
+            f" It's been listed {days_listed} days without selling, which is its own"
+            f" evidence the ask is too high — target trimmed toward the low end of the range."
+        )
+
     return Verdict(
         kind=kind,
         reason=reason,
@@ -217,13 +263,14 @@ def build_verdict(
         local_ask_discount=fees.fb_ask_discount if local_net is not None else None,
         target_low=target_band.p25,
         target_high=target_band.p75,
-        target=target_band.p50,
+        target=target,
         recommended_venue=venue,
         ebay_net=ebay_net,
         local_net=local_net,
         current_net=current_net,
         opportunity_usd=opportunity,
         shipping_estimate=shipping,
+        days_listed=days_listed,
     )
 
 

@@ -8,13 +8,13 @@
         ▼
   ┌─────────────┐   Apify: memo23/ebay-search-scraper-ppe (mode: active)
   │ 1. INVENTORY│   → your listings: title, ask price, photo, listed condition
-  └─────────────┘
-        │
+  └─────────────┘   + days-listed, from the sightings ledger (see Time on
+        │             market — the scraper has no "listed on" date)
         ▼
   ┌─────────────┐   Vision (Anthropic or any OpenAI-compatible server),
   │ 2. VISION   │   1 call per item → canonical description, attributes
-  │    (yours)  │   (incl. category/model/capacity), condition grade, and
-  └─────────────┘   TWO search queries
+  │    (yours)  │   (category/model + the numeric specs), condition grade,
+  └─────────────┘   and TWO search queries
         │
         ├──────────────────────┐
         ▼                      ▼
@@ -41,8 +41,8 @@
             │ 7. AGGREGATE│
             └─────────────┘
                    ▼
-            ┌─────────────┐  target price + venue, net-proceeds math
-            │ 8. ADVISE   │
+            ┌─────────────┐  target price + venue, net-proceeds math,
+            │ 8. ADVISE   │  trimmed by time on market
             └─────────────┘
 ```
 
@@ -253,31 +253,63 @@ for. The guards, in the order a comp actually passes through them
      tradeoff: a same-brand, different-product mismatch (a padlock scored
      against a USB flash drive because both are "Apricorn Aegis") can still
      slip through on brand alone if nothing else disagrees.
-3. **Numeric-spec price scaling** (`SCALABLE_NUMERIC_ATTRIBUTES`, currently
-   just `capacity`) — a *different* mechanism from attribute agreement,
-   because a capacity difference doesn't mean "different product", it means
-   "same product line, price should be scaled". Generic on purpose: any
-   attribute whose value is a free-text "amount + unit" spec (a package's
-   "4GB", "500ml", "2-pack") can reuse the same parse-and-scale mechanism
-   just by being added to `SCALABLE_NUMERIC_ATTRIBUTES` and the vision
-   prompt — no new parsing or pricing code per attribute. `match.
-   parse_quantity` extracts `(amount, unit)`; `match.quantity_scale_factor`
-   returns a combined ratio (raised to `QUANTITY_SCALE_EXPONENT = 0.6`,
-   **an uncalibrated heuristic** — bigger specs are assumed to cost less per
-   unit, which held up in one real product line's data but hasn't been
-   checked against real paired same-product-different-capacity sales) when
-   specs differ but share a unit, or `None` (reject the comp, don't guess) if
-   they can't be reconciled — different units, or either side unparsable. A
-   scaled comp's `Comp.price_note` records the adjustment
-   (`"scaled from $X (x0.44)"`) and the frontend surfaces it as a hover-
-   titled asterisk on the price, plus a caption on the comp table when any
-   row was scaled — a silently-adjusted number is exactly the kind of thing
-   this app exists to make visible, not hide.
+3. **Numeric-spec price scaling** (`NUMERIC_SPEC_POLICIES`) — a *different*
+   mechanism from attribute agreement, because a spec difference doesn't mean
+   "different product", it means "same product line, price should be scaled".
+   Four dimensions, each with its **own** price relationship, because they
+   demonstrably do not price alike:
+
+   | Dimension | Exponent | Why |
+   |---|---|---|
+   | `capacity` (storage/volume) | 0.6 | Sub-linear — a 64GB drive is nowhere near 16x a 4GB one. |
+   | `pack_count` | 0.9 | Near-linear — a 3-pack really is worth ~3x a single. |
+   | `length` (cables, tube) | 0.35 | Weakly sub-linear — a 15ft cable costs somewhat more than a 6ft one, nothing like 2.5x. |
+   | `form_factor` (fan/radiator mm) | **never priced** | 120mm vs 140mm is a *different fan*, not more fan. Captured and displayed, excluded from pricing. |
+
+   These exponents are **uncalibrated starting assumptions**, not
+   measurements — but they are deliberately *different* assumptions. A single
+   shared `capacity` field with one exponent (what this used to be) was wrong
+   in both directions at once: it scaled a 3-pack as though pack count
+   behaved like storage capacity, and it compared a fan's "120mm" against a
+   cable's "6 ft" as though they were the same kind of number.
+
+   `match.parse_quantity` extracts `(amount, unit)`;
+   `match.quantity_scale_adjustments` returns one `SpecAdjustment` per
+   differing dimension and `quantity_scale_factor` multiplies them together.
+   Adding a dimension needs only a `NUMERIC_SPEC_POLICIES` entry plus a
+   vision-prompt line — no new parsing or pricing code.
+
+   - **Units are normalised and converted within a family.** `_UNIT_ALIASES`
+     folds the spellings that actually show up ("6 ft" / "6 feet" / "3.3'";
+     "3-pack" / "3 Pack" / "3x"), and `_UNIT_FAMILY` converts inside a family
+     so 1TB vs 500GB is a 2x difference rather than an irreconcilable one.
+     Without this a comp got thrown away for disagreeing with itself.
+   - **A spec that can't be parsed or compared never rejects a comp.**
+     Unparsable ("unspecified", "40+ parts") or cross-family values mean
+     *missing information*, not evidence of a different product, so the comp
+     is kept at its unmodified price. This reverses earlier behaviour that
+     silently deleted good comps; rejecting genuinely different products is
+     `HARD_ATTRIBUTES`' job, and this function now only ever adjusts prices.
+   - **Parsing is anchored, with a unit whitelist.** Unanchored matching is
+     how `"10-in-1"` became *ten inches* and `"1 x 3 ft"` became *a one-pack*
+     — both parsed, both wrong, both silently repriced a comp.
+   - A scaled comp's `Comp.price_note` records the adjustment
+     (`"scaled from $X (x0.44)"`), and the frontend renders the full
+     per-dimension breakdown as a **visible table** under the comp's price
+     (feature / the listing's amount / yours / the multiplier), not a hover
+     tooltip — an adjustment nobody can see is only marginally better than a
+     silent one. Unpriced dimensions render as "not priced" rather than a
+     misleading `×1.00`.
    - **Vision has real run-to-run variance on whether it surfaces a numeric
      attribute at all**, even when the title states it plainly. `match.
-     capacity_from_text` is a title-regex fallback applied (both to the item
-     and to each comp) only when the vision attribute is missing, never
-     overriding a real grade.
+     specs_from_text` is a title-regex fallback applied (both to the item and
+     to each comp) per dimension, only where the vision attribute is missing,
+     never overriding a real grade. It routes by *unit*, not unit family:
+     millimetres in a secondhand title are a form factor (a 120mm fan, a
+     360mm radiator), feet/metres/inches are a length (a 6ft cable). Without
+     that split the same "120mm" was a priced length via the title and an
+     unpriced form factor via vision — one listing, two answers, decided by
+     which source happened to win.
 4. **Always show the comps.** Every verdict expands to the listings behind
    it, with photos, condition, matched attributes, RRF score, and the price
    scaling note if any. A human spots a bad match instantly, and a verdict
@@ -317,7 +349,9 @@ One vision call per photo, returning structured JSON:
   "attributes": {
     "category": "sideboard", "material": "teak", "era": "1960s",
     "style": "danish modern", "size_class": "large", "color": "brown",
-    "capacity": "4GB"
+    // numeric specs, each its own dimension -- see § Matching
+    "capacity": "4GB", "pack_count": "3-pack",
+    "length": "6ft", "form_factor": "120mm"
   },
   "condition": "usable",
   "condition_evidence": "visible veneer chip on left door, original hardware intact, no structural damage",
@@ -577,6 +611,78 @@ space instead, asserting invariants like "opportunity_usd can't dwarf every
 price the verdict was given" — the general shape of "common sense" check
 this bug exposed was missing.
 
+### 5. One `capacity` field was four different questions
+
+The numeric-spec mechanism shipped with a single `capacity` attribute and a
+single exponent. Against real vision output that field was simultaneously
+holding storage sizes (`64GB`), pack counts (`3-pack`), cable lengths
+(`6 ft`), and fan/radiator form factors (`120mm`) — four dimensions that
+price nothing alike, being scaled by one number and compared to each other
+as though they were the same kind of quantity.
+
+Three failures fell out of that, all found by replaying the 224 real cached
+vision results through the parser rather than by reasoning about it:
+
+1. **Silent comp deletion.** An unparsable spec (`"unspecified"`,
+   `"40+ parts"`) or a cross-dimension comparison (a `3-pack` item vs. a
+   `120mm` comp) returned "irreconcilable", which the caller treated as
+   *reject the comp*. Missing information was being read as evidence of a
+   different product.
+2. **Confidently wrong parses.** Unanchored matching turned `"10-in-1"` into
+   *ten inches* and `"1 x 3 ft"` into *a one-pack*. Both parsed. Both
+   silently repriced a comp.
+3. **Unit spellings fragmenting a dimension.** `"6 ft"` and `"6 feet"`, or
+   `"3-pack"` and `"3x"`, were different units — so a comp could be thrown
+   away for disagreeing with itself.
+
+**Change:** four dimensions with their own exponents, a unit alias table and
+in-family conversion, anchored parsing against a unit whitelist, and — the
+behavioural reversal — numeric specs **never reject a comp**. See § Matching.
+`form_factor` is priced at all only in the sense that it deliberately isn't:
+a 140mm fan is a different fan, not more fan.
+
+The general lesson is the one from § 3: the mechanism was built generic
+("any attribute of the shape amount+unit reuses this") and that genericity
+was doing real harm, because the *shape* being shared told us nothing about
+whether the *semantics* were. Sharing a parser is fine; sharing a price
+model is not.
+
+## Time on market
+
+A listing that has sat unsold for two months is telling you something no comp
+can: whatever the band says, *this* market has had a fair look at *this* price
+and declined it. Comps describe what sells; time on market describes what
+didn't.
+
+**Getting the age is the hard part.** eBay's search output — what
+`memo23/ebay-search-scraper-ppe` returns — carries no "listed on" date for
+active listings (verified against real cached responses: the row has
+`price`, `condition`, `quantity`, `availability`, `scrapedAt`, and nothing
+about when the listing started). So age is **observed rather than scraped**:
+`sightings.py` writes down the first time each `(store_url, external_id)` is
+seen and every later run measures from there.
+
+That makes the ledger's durability the whole feature, which is why it is
+deliberately *not* in `cache.py`. That module is a TTL cache whose entries
+are meant to expire and which `DELETE /api/cache` wipes on purpose; this is
+the only record that a listing existed before today. Same shape, opposite
+lifetime.
+
+**How it moves the number** (`pricing.staleness_pull`): nothing at all under
+`STALE_AFTER_DAYS` (30) — that's just normal time on market — then a linear
+slide until `VERY_STALE_DAYS` (90), at which point the recommended target has
+moved from the band's median all the way to its 25th percentile.
+
+The important constraint: staleness moves the target **within the range real
+sales already support, never below it**. Age is soft evidence — a bad photo
+or a bad title stalls a correctly-priced listing too — so it is allowed to
+pick a different point inside the observed band and never to invent a price
+under all of it. A property test pins exactly that (`target >= target_low`
+for any age, including absurd ones). The reason text always names the age
+that caused the trim, and the row shows an "Nd unsold" chip, because a
+recommendation that quietly moved for invisible reasons is the thing this
+app exists not to do.
+
 ## Tier 3 — dry run only
 
 Given an eBay seller API key, render the exact revise-price call that *would*
@@ -676,14 +782,30 @@ Say these out loud rather than being caught by them:
   toward an expected close price, but that discount is an assumption, not a
   measurement — there's no real paired asking-vs-actually-closed data behind
   the `0.85` default.
-- No listing dates from FB, so no staleness signal on local comps.
+- No listing dates from FB, so no staleness signal on local *comps* (the
+  seller's own listings do have one — see § Time on market).
+- Listing age is observed, not scraped, so a store's **first** analysis
+  reports every item as 0 days old and the staleness signal does nothing.
+  It only becomes real on later runs, and it lives in one JSON file
+  (`.cache/sightings.json`) — delete that and every item looks new again.
 - City-level location only; "local" means the metro, not a radius.
 - Condition grading from a single photo misses interior/back/underside damage.
 - Fee rates are category-dependent approximations.
 - Sold-comp actor is third-party; its coverage and freshness are unaudited.
-- `QUANTITY_SCALE_EXPONENT` (capacity/spec price scaling) is an uncalibrated
-  heuristic — validated against one real product line's rough shape, not
-  fit against real paired same-product-different-spec sales data.
+- The per-dimension scaling exponents in `NUMERIC_SPEC_POLICIES` (0.6
+  capacity / 0.9 pack count / 0.35 length) are uncalibrated heuristics —
+  their *relative ordering* is well-founded (pack count really does price
+  closer to linear than storage capacity does), but the absolute values are
+  not fit against real paired same-product-different-spec sales data.
+- Numeric specs are only as good as what vision reads off a photo. A spec
+  it never surfaces (and that `specs_from_text` can't find in the title)
+  simply doesn't adjust anything — comps are compared unscaled, silently.
+  The failure mode is a missed adjustment, not a wrong one, but it means
+  adjustment coverage is patchy and varies run to run.
+- `form_factor` is captured and displayed but never priced. That is right
+  for fans (140mm is a different fan, not more fan) and wrong-ish for
+  radiators (a 360mm really does cost more than a 120mm); the two share a
+  unit and can't currently be told apart, so the safer no-op was chosen.
 - Model/feature-line preference in bucketing (`match.matched_prices`) tries
   the narrower tier and falls back safely, but is still a *substring-match*
   preference over free-form LLM text, not a verified product-identity

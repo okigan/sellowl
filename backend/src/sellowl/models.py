@@ -55,6 +55,26 @@ class VisionResult(BaseModel):
     search_query_narrow: str = ""
 
 
+class SpecAdjustment(BaseModel):
+    """One numeric-spec difference between a comp and the item being priced
+    (see match.NUMERIC_SPEC_POLICIES) — e.g. a 64GB comp's price scaled down
+    to approximate what a 4GB item would fetch. Rendered as a table in the UI
+    rather than a hover tooltip, so the reasoning behind an adjusted price is
+    visible without interaction.
+
+    `scaled` is False for dimensions captured but deliberately not priced
+    (form factor: a 140mm fan is a different fan, not more fan). Those still
+    appear in the table — the difference is real and worth seeing — but with
+    `factor` pinned at 1.0 so nothing implies the price moved.
+    """
+
+    feature: str
+    comp_amount: str
+    item_amount: str
+    factor: float
+    scaled: bool = True
+
+
 class Comp(BaseModel):
     """One comparable listing from either venue."""
 
@@ -78,6 +98,7 @@ class Comp(BaseModel):
     # own (see match.scale_price_for_capacity) — e.g. a 128GB comp's price
     # scaled down to approximate a 32GB item. Blank when price is as-scraped.
     price_note: str = ""
+    spec_adjustments: list[SpecAdjustment] = Field(default_factory=list)
     scraped_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     job_id: str = ""
 
@@ -115,6 +136,10 @@ class Verdict(BaseModel):
     current_net: float | None = None
     opportunity_usd: float | None = None
     shipping_estimate: float | None = None
+    # How long this listing has sat unsold, when known. eBay's search output
+    # has no "listed on" date, so this is observed across runs (see
+    # sightings.py) -- None means this store has only ever been analysed once.
+    days_listed: int | None = None
     # Which bucket the sold/local band actually came from: "model+condition"
     # (narrowest, most specific), "condition" (blended across models within
     # the item's condition grade), or "all" (blended across conditions too —
@@ -143,6 +168,9 @@ class Item(BaseModel):
     # Real signal available even when vision is off — see vision.condition,
     # which takes priority once a photo grade exists.
     listed_condition: Condition = Condition.UNKNOWN
+    # Days this listing has sat unsold, measured from the first time this app
+    # saw it (see sightings.py). 0 on a store's first analysis.
+    days_listed: int | None = None
     vision: VisionResult | None = None
     comps: list[Comp] = Field(default_factory=list)
     verdict: Verdict | None = None

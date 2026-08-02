@@ -54,9 +54,9 @@ Return ONLY a JSON object, no prose, with exactly these keys:
                          features. No marketing language. Max 30 words.
   attributes             Object with any of: category, model, material,
                          brand, era, style, size_class (one of: small,
-                         medium, large, xlarge), color, capacity. Omit keys
-                         you cannot determine from the photo. Never guess a
-                         brand or model.
+                         medium, large, xlarge), color, capacity, pack_count,
+                         length, form_factor. Omit keys you cannot determine
+                         from the photo. Never guess a brand or model.
                          category  What KIND of object this is, 1-3 plain
                          words (e.g. "USB flash drive", "padlock", "case
                          fan", "radiator"). Keep it short and generic, not a
@@ -83,12 +83,25 @@ Return ONLY a JSON object, no prose, with exactly these keys:
                          models with different typical prices. Only from
                          text you can actually read — never guess or infer
                          one from context.
-                         capacity  A storage/volume/quantity spec printed on
-                         the item or its packaging (e.g. "4GB", "64GB",
-                         "2-pack", "500ml"). Only from text you can actually
-                         read — never estimate or guess this one. Two
-                         otherwise-identical items with different capacity
-                         are a different product, not a variant.
+                         The next four are NUMERIC SPECS. Each is a bare
+                         "<number><unit>" and nothing else — no ranges, no
+                         "+", no "10-in-1", no prose. Omit the key entirely
+                         rather than writing "unspecified" or "40+ parts".
+                         Read them off the item or packaging; never estimate.
+                         Keep them in separate keys even when the packaging
+                         prints them together: they price differently.
+                         capacity     How much the thing holds — storage or
+                         volume only (e.g. "4GB", "64GB", "500ml", "1TB").
+                         pack_count   How many identical units are in the
+                         package (e.g. "3-pack", "2-pack"). A single item is
+                         "1-pack"; omit if not stated.
+                         length       Physical length of a cable, cord,
+                         tube, or strap (e.g. "6ft", "1.8m", "15ft").
+                         form_factor  A size that names a product variant
+                         rather than an amount — fan/radiator size, tube
+                         diameter (e.g. "120mm", "240mm", "360mm"). This one
+                         is NOT more-of-the-same: a 140mm fan is a different
+                         fan, not a bigger quantity of fan.
   condition              Exactly one of: "rough", "usable", "clean".
                          rough  = damaged, missing parts, heavy wear, parts-only
                          usable = works, honest wear, cosmetic flaws visible

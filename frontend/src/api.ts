@@ -25,6 +25,7 @@ export interface Verdict {
   current_net: number | null;
   opportunity_usd: number | null;
   shipping_estimate: number | null;
+  days_listed: number | null;
   // Which bucket the band actually came from: "model+condition" (narrowest),
   // "condition" (blended across models), or "all" (blended across
   // conditions too). The reason text already discloses "all" in prose; this
@@ -32,6 +33,16 @@ export interface Verdict {
   sold_band_tier: string | null;
   local_band_tier: string | null;
   local_ask_discount: number | null;
+}
+
+export interface SpecAdjustment {
+  feature: string;
+  comp_amount: string;
+  item_amount: string;
+  factor: number;
+  /** False for dimensions shown for context but deliberately not priced
+   * (form factor: a 140mm fan is a different fan, not more fan). */
+  scaled: boolean;
 }
 
 export interface Comp {
@@ -51,6 +62,7 @@ export interface Comp {
   description: string;
   score: number;
   price_note: string;
+  spec_adjustments: SpecAdjustment[];
 }
 
 export interface Vision {
@@ -68,6 +80,7 @@ export interface Item {
   ask_price: number | null;
   url: string;
   photo_url: string;
+  days_listed: number | null;
   vision: Vision | null;
   comps: Comp[];
   verdict: Verdict | null;

@@ -89,3 +89,29 @@ def test_shipping_never_exceeds_sanity_ceiling(
     assert verdict.shipping_estimate is not None
     ceiling = max(ask_price, *sold_prices) * 3.0
     assert verdict.shipping_estimate <= ceiling
+
+
+@given(
+    ask_price=price,
+    sold_prices=prices,
+    days_listed=st.one_of(st.none(), st.integers(min_value=0, max_value=100_000)),
+)
+def test_staleness_never_targets_below_the_observed_band(
+    ask_price: float, sold_prices: list[float], days_listed: int | None
+) -> None:
+    """Time on market picks a different point *inside* the range real sales
+    support. However long something has sat, it must never produce a target
+    below every price anyone actually paid."""
+    verdict = build_verdict(
+        ask_price=ask_price,
+        sold_prices=sold_prices,
+        local_prices=[],
+        attributes={"size_class": "small"},
+        condition=Condition.USABLE,
+        fees=FEES,
+        min_comps=1,
+        days_listed=days_listed,
+    )
+    assert verdict.target is not None and verdict.target_low is not None
+    assert verdict.target >= verdict.target_low
+    assert verdict.target <= max(sold_prices)

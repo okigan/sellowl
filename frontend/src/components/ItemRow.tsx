@@ -26,10 +26,38 @@ function CompRow({ comp }: { comp: Comp }) {
       </td>
       <td className="px-2 py-2.5">
         {money(comp.price)}
-        {comp.price_note && (
-          <span className="ml-1 cursor-help text-warn" title={comp.price_note}>
-            *
-          </span>
+        {comp.spec_adjustments.length > 0 && (
+          <div className="mt-1 overflow-hidden rounded border border-line/60">
+            <table className="border-collapse text-[10px]">
+              <thead>
+                <tr className="bg-overlay-1 text-left uppercase tracking-wide text-muted/70">
+                  <th className="px-1.5 py-0.5 font-medium">Feature</th>
+                  <th className="px-1.5 py-0.5 font-medium">Listing</th>
+                  <th className="px-1.5 py-0.5 font-medium">Yours</th>
+                  <th className="px-1.5 py-0.5 text-right font-medium">Adj.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {comp.spec_adjustments.map((a) => (
+                  <tr key={a.feature} className="text-muted">
+                    <td className="px-1.5 py-0.5 capitalize">{a.feature}</td>
+                    <td className="px-1.5 py-0.5">{a.comp_amount}</td>
+                    <td className="px-1.5 py-0.5">{a.item_amount}</td>
+                    <td
+                      className="px-1.5 py-0.5 text-right"
+                      title={
+                        a.scaled
+                          ? undefined
+                          : "A different variant, not more of the same — shown for context, not priced in."
+                      }
+                    >
+                      {a.scaled ? `×${a.factor.toFixed(2)}` : "not priced"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </td>
       <td className="px-2 py-2.5">
@@ -72,6 +100,14 @@ export function ItemRow({ item, index }: { item: Item; index: number }) {
                   evidence={item.vision?.condition_evidence}
                 />
                 {verdict && <VerdictChip kind={verdict.kind} />}
+                {item.days_listed !== null && item.days_listed > 30 && (
+                  <span
+                    className="rounded bg-warn/10 px-1.5 py-0.5 text-[10px] text-warn"
+                    title="Unsold this long is its own evidence the ask is too high — the target is trimmed toward the low end of the range."
+                  >
+                    {item.days_listed}d unsold
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -157,10 +193,11 @@ export function ItemRow({ item, index }: { item: Item; index: number }) {
                     ))}
                   </tbody>
                 </table>
-                {item.comps.some((c) => c.price_note) && (
+                {item.comps.some((c) => c.spec_adjustments.length > 0) && (
                   <p className="pt-2 text-[11px] text-muted/60">
-                    <span className="text-warn">*</span> price adjusted for a different
-                    capacity/spec than this item's — hover for detail.
+                    Where a comp's specs differ from this item's, the difference is listed
+                    under its price. Capacity, pack count and length are scaled into the
+                    price; form factor is shown for context but never priced.
                   </p>
                 )}
               </div>

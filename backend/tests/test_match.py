@@ -16,8 +16,10 @@ from sellowl.match import (
     condition_matched_prices,
     matched_prices,
     parse_quantity,
+    quantity_scale_adjustments,
     quantity_scale_factor,
     rrf_fuse,
+    specs_from_text,
 )
 from sellowl.models import Comp, Condition, Venue
 
@@ -174,8 +176,42 @@ class TestCapacityFromText:
     def test_no_match_is_none(self) -> None:
         assert capacity_from_text("Apricorn Aegis Padlock 3.0") is None
 
-    def test_pack_count_in_title(self) -> None:
-        assert capacity_from_text("Enermax Case Fan 3-Pack with Controller") == "3PACK"
+    def test_pack_count_is_no_longer_a_capacity(self) -> None:
+        """Pack count is its own dimension now -- it prices near-linearly,
+        capacity prices sub-linearly, so conflating them mis-scaled both."""
+        assert capacity_from_text("Enermax Case Fan 3-Pack with Controller") is None
+        assert specs_from_text("Enermax Case Fan 3-Pack with Controller") == {"pack_count": "3PACK"}
+
+
+class TestSpecsFromText:
+    def test_splits_dimensions_by_unit(self) -> None:
+        assert specs_from_text("Apricorn Aegis Secure Key 4GB") == {"capacity": "4GB"}
+        assert specs_from_text("AmazonBasics RCA Cable 8 ft Gold") == {"length": "8FT"}
+        assert specs_from_text("Enermax T.B.RGB 3-Pack") == {"pack_count": "3PACK"}
+
+    def test_finds_several_dimensions_in_one_title(self) -> None:
+        found = specs_from_text("Thermaltake Case Fan 3-Pack 6ft cable 500GB bundle")
+        assert found == {"pack_count": "3PACK", "length": "6FT", "capacity": "500GB"}
+
+    def test_first_hit_per_dimension_wins(self) -> None:
+        assert specs_from_text("Cable 6ft and also 15ft")["length"] == "6FT"
+
+    def test_ignores_numbers_that_are_not_specs(self) -> None:
+        """Real observed vision/title junk that used to parse as a spec."""
+        assert specs_from_text("Makeblock Ultimate 2.0 - 10-in-1 Robot Kit") == {}
+        assert specs_from_text("Kit with 130 projects and 70 parts") == {}
+
+    def test_millimetres_are_a_form_factor_not_a_length(self) -> None:
+        """A secondhand title's "120mm" is a fan/radiator size, not cable
+        footage. Routing it to `length` priced a fan's size like cable
+        footage AND disagreed with what vision does with the same value, so
+        one listing got two answers depending on which source won."""
+        assert specs_from_text("Enermax 120mm Case Fan") == {"form_factor": "120MM"}
+        assert specs_from_text("Thermaltake 360mm Radiator") == {"form_factor": "360MM"}
+        assert specs_from_text("RCA Cable 6 ft") == {"length": "6FT"}
+
+    def test_no_match_is_empty(self) -> None:
+        assert specs_from_text("Apricorn Aegis Padlock 3.0") == {}
 
 
 class TestQuantityScaleFactor:
@@ -197,14 +233,90 @@ class TestQuantityScaleFactor:
         of "64GB", so naive substring tolerance would treat them as equal."""
         down = quantity_scale_factor({"capacity": "4GB"}, {"capacity": "64GB"})
         up = quantity_scale_factor({"capacity": "64GB"}, {"capacity": "4GB"})
-        assert down is not None and up is not None
         assert down < 1.0 < up
 
-    def test_mismatched_units_is_irreconcilable(self) -> None:
-        assert quantity_scale_factor({"capacity": "4GB"}, {"capacity": "2-pack"}) is None
+    def test_converts_across_units_in_one_family(self) -> None:
+        """1TB vs 500GB is a 2x difference, not an irreconcilable one."""
+        assert quantity_scale_factor({"capacity": "1TB"}, {"capacity": "500GB"}) > 1.0
+        assert quantity_scale_factor({"capacity": "1000GB"}, {"capacity": "1TB"}) == 1.0
 
-    def test_unparsable_value_is_irreconcilable(self) -> None:
-        assert quantity_scale_factor({"capacity": "4GB"}, {"capacity": "large"}) is None
+    def test_unparsable_value_is_neutral_not_a_rejection(self) -> None:
+        """ "Missing information" must never masquerade as "different
+        product" -- that silently deleted comps whose spec read
+        "unspecified" or "40+ parts"."""
+        assert quantity_scale_factor({"capacity": "4GB"}, {"capacity": "large"}) == 1.0
+        assert quantity_scale_factor({"capacity": "4GB"}, {"capacity": "unspecified"}) == 1.0
+
+    def test_different_families_are_neutral_not_a_rejection(self) -> None:
+        assert quantity_scale_factor({"capacity": "4GB"}, {"capacity": "2-pack"}) == 1.0
+
+    def test_pack_count_scales_more_steeply_than_capacity(self) -> None:
+        """A 3-pack really is worth ~3x a single; a 3x capacity is worth far
+        less than 3x. Same ratio, deliberately different exponents."""
+        pack = quantity_scale_factor({"pack_count": "3-pack"}, {"pack_count": "1-pack"})
+        capacity = quantity_scale_factor({"capacity": "3GB"}, {"capacity": "1GB"})
+        assert pack > capacity > 1.0
+
+    def test_length_scales_more_gently_than_capacity(self) -> None:
+        length = quantity_scale_factor({"length": "3ft"}, {"length": "1ft"})
+        capacity = quantity_scale_factor({"capacity": "3GB"}, {"capacity": "1GB"})
+        assert 1.0 < length < capacity
+
+    def test_form_factor_never_moves_the_price(self) -> None:
+        """120mm vs 140mm is a different fan, not more fan."""
+        assert quantity_scale_factor({"form_factor": "120mm"}, {"form_factor": "140mm"}) == 1.0
+        assert quantity_scale_factor({"form_factor": "120mm"}, {"form_factor": "360mm"}) == 1.0
+
+    def test_several_dimensions_compound(self) -> None:
+        both = quantity_scale_factor(
+            {"capacity": "8GB", "pack_count": "2-pack"},
+            {"capacity": "4GB", "pack_count": "1-pack"},
+        )
+        capacity_only = quantity_scale_factor({"capacity": "8GB"}, {"capacity": "4GB"})
+        assert both > capacity_only > 1.0
+
+
+class TestQuantityScaleAdjustments:
+    def test_no_numeric_attributes_present_is_empty(self) -> None:
+        assert quantity_scale_adjustments({"brand": "Apricorn"}, {"brand": "Apricorn"}) == []
+
+    def test_equal_capacity_is_empty(self) -> None:
+        assert quantity_scale_adjustments({"capacity": "4GB"}, {"capacity": "4GB"}) == []
+
+    def test_different_capacity_reports_both_amounts_and_factor(self) -> None:
+        adjustments = quantity_scale_adjustments({"capacity": "4GB"}, {"capacity": "64GB"})
+        assert len(adjustments) == 1
+        adjustment = adjustments[0]
+        assert adjustment.feature == "capacity"
+        assert adjustment.item_amount == "4GB"
+        assert adjustment.comp_amount == "64GB"
+        assert 0 < adjustment.factor < 1.0
+        assert adjustment.scaled is True
+
+    def test_irreconcilable_is_empty_not_a_rejection(self) -> None:
+        assert quantity_scale_adjustments({"capacity": "4GB"}, {"capacity": "2-pack"}) == []
+
+    def test_form_factor_is_reported_but_marked_unscaled(self) -> None:
+        """The difference is real and worth showing; pricing it is not."""
+        adjustments = quantity_scale_adjustments({"form_factor": "120mm"}, {"form_factor": "360mm"})
+        assert len(adjustments) == 1
+        assert adjustments[0].feature == "form factor"
+        assert adjustments[0].scaled is False
+        assert adjustments[0].factor == 1.0
+
+    def test_reports_one_entry_per_differing_dimension(self) -> None:
+        adjustments = quantity_scale_adjustments(
+            {"capacity": "4GB", "pack_count": "1-pack", "length": "6ft"},
+            {"capacity": "64GB", "pack_count": "3-pack", "length": "6ft"},
+        )
+        assert {a.feature for a in adjustments} == {"capacity", "pack count"}
+
+    def test_product_of_factors_matches_quantity_scale_factor(self) -> None:
+        adjustments = quantity_scale_adjustments({"capacity": "4GB"}, {"capacity": "64GB"})
+        product = 1.0
+        for adjustment in adjustments:
+            product *= adjustment.factor
+        assert product == quantity_scale_factor({"capacity": "4GB"}, {"capacity": "64GB"})
 
 
 class TestApplyGuards:
@@ -256,6 +368,12 @@ class TestApplyGuards:
         assert len(kept) == 1
         assert kept[0].price is not None and kept[0].price < 64.0
         assert "scaled" in kept[0].price_note
+        assert len(kept[0].spec_adjustments) == 1
+        adjustment = kept[0].spec_adjustments[0]
+        assert adjustment.feature == "capacity"
+        assert adjustment.comp_amount == "64GB"
+        assert adjustment.item_amount == "4GB"
+        assert adjustment.factor < 1.0
 
     def test_matching_capacity_leaves_price_and_note_untouched(self) -> None:
         kept = apply_guards(
@@ -265,13 +383,49 @@ class TestApplyGuards:
         assert len(kept) == 1
         assert kept[0].price == 20.0
         assert kept[0].price_note == ""
+        assert kept[0].spec_adjustments == []
 
-    def test_drops_irreconcilable_capacity_units(self) -> None:
+    def test_keeps_comps_whose_spec_cannot_be_compared(self) -> None:
+        """Regression: an unparsable or different-family spec used to delete
+        the comp outright. Real vision output is full of "unspecified" and
+        "40+ parts", and every one of those was quietly costing a comp."""
+        for junk in ("2-pack", "unspecified", "40+ parts", "10-in-1"):
+            kept = apply_guards(
+                [comp("a", price=100.0, attrs={"capacity": junk})],
+                item_attrs={"capacity": "4GB"},
+            )
+            assert len(kept) == 1, f"{junk!r} should not delete a comp"
+            assert kept[0].price == 100.0, f"{junk!r} should not move the price"
+
+    def test_scales_a_pack_count_difference(self) -> None:
+        """The dimension the user could not see working: a 3-pack comp is a
+        usable signal for a single unit once divided down."""
         kept = apply_guards(
-            [comp("a", attrs={"capacity": "2-pack"})],
-            item_attrs={"capacity": "4GB"},
+            [comp("a", price=30.0, attrs={"pack_count": "3-pack"})],
+            item_attrs={"pack_count": "1-pack"},
         )
-        assert kept == []
+        assert len(kept) == 1
+        assert kept[0].price is not None and kept[0].price < 15.0
+        assert kept[0].spec_adjustments[0].feature == "pack count"
+
+    def test_scales_a_cable_length_difference(self) -> None:
+        kept = apply_guards(
+            [comp("a", price=20.0, attrs={"length": "15ft"})],
+            item_attrs={"length": "6ft"},
+        )
+        assert len(kept) == 1
+        assert kept[0].price is not None and kept[0].price < 20.0
+        assert kept[0].spec_adjustments[0].feature == "length"
+
+    def test_form_factor_difference_is_shown_but_never_priced(self) -> None:
+        kept = apply_guards(
+            [comp("a", price=20.0, attrs={"form_factor": "360mm"})],
+            item_attrs={"form_factor": "120mm"},
+        )
+        assert len(kept) == 1
+        assert kept[0].price == 20.0
+        assert kept[0].price_note == ""
+        assert kept[0].spec_adjustments[0].scaled is False
 
 
 class TestConditionMatchedPrices:

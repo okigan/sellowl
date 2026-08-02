@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from .models import Comp
+from .models import Comp, SpecAdjustment
 
 # Attributes where a disagreement means it is a different product, not a
 # variant. Compared only when both sides actually have the attribute.
@@ -28,27 +28,116 @@ from .models import Comp
 # size_class still feeds shipping-cost estimation (pricing.shipping_estimate)
 # and category is still shown for audit; neither gates matching.
 #
-# Numeric spec attributes (capacity, and any future one — volume, wattage,
-# pack count...) are handled separately, in SCALABLE_NUMERIC_ATTRIBUTES below,
-# not here: a difference there does not necessarily mean "different product",
-# it means "same product line, price should be scaled", so a plain string
-# hard-reject would throw away a usable comp instead of adjusting it.
+# Numeric spec attributes (capacity, pack_count, length, form_factor) are
+# handled separately, in NUMERIC_SPEC_POLICIES below, not here: a difference
+# there does not necessarily mean "different product", it means "same product
+# line, price should be scaled", so a plain string hard-reject would throw
+# away a usable comp instead of adjusting it.
 HARD_ATTRIBUTES = ("material", "brand", "era")
 
-# Attribute keys whose value is a free-text "amount + unit" spec (a package's
-# "4GB", "64 GB", "500ml", "2-pack") rather than a category label. Generic on
-# purpose: any attribute matching that shape can reuse the same parse-and-
-# scale mechanism below just by being added here and to the vision prompt —
-# no new parsing or pricing code needed per attribute.
-SCALABLE_NUMERIC_ATTRIBUTES = ("capacity",)
 
-# Rough heuristic, not calibrated against real data: bigger specs typically
-# cost less per unit (a 64GB drive rarely costs 16x a 4GB one), so scale
-# sub-linearly rather than 1:1. See docs/DESIGN.md § Matching if this needs
-# real calibration later.
+@dataclass(frozen=True)
+class SpecPolicy:
+    """How one numeric spec dimension relates to price.
+
+    `exponent` is the power the (item / comp) amount ratio is raised to.
+    `None` means "capture the difference, never price it": the dimension
+    distinguishes product variants rather than measuring more-of-the-same,
+    so scaling it would fabricate confidence. See § Matching in DESIGN.md.
+    """
+
+    exponent: float | None
+    label: str
+
+
+# Each numeric spec gets its own dimension *and its own price relationship*.
+# Lumping them into one `capacity` field with one exponent (what this used to
+# do) was wrong in both directions: it scaled a 3-pack as if pack count
+# behaved like storage capacity, and it compared a fan's "120mm" against a
+# cable's "6 ft" as though they were the same kind of number.
+#
+# Exponents are uncalibrated starting assumptions, not measurements -- but
+# they are deliberately *different* assumptions, because these dimensions
+# demonstrably do not price alike:
+#   capacity     sub-linear: a 64GB drive is nowhere near 16x a 4GB one.
+#   pack_count   near-linear: a 3-pack really does cost ~3x a single, minus
+#                a small bulk discount.
+#   length       weakly sub-linear: a 15ft cable costs somewhat more than a
+#                6ft one, nothing like 2.5x.
+#   form_factor  not priced at all. 120mm vs 140mm is a different fan, not
+#                more fan; 240mm vs 360mm is a different radiator. Ratio
+#                scaling here produces confident nonsense, so it is captured
+#                for audit and explicitly excluded from pricing.
+NUMERIC_SPEC_POLICIES: dict[str, SpecPolicy] = {
+    "capacity": SpecPolicy(exponent=0.6, label="capacity"),
+    "pack_count": SpecPolicy(exponent=0.9, label="pack count"),
+    "length": SpecPolicy(exponent=0.35, label="length"),
+    "form_factor": SpecPolicy(exponent=None, label="form factor"),
+}
+
+# Every dimension vision is asked to extract, priced or not.
+NUMERIC_SPEC_ATTRIBUTES = tuple(NUMERIC_SPEC_POLICIES)
+
+# Only the ones that actually move a price.
+SCALABLE_NUMERIC_ATTRIBUTES = tuple(
+    key for key, policy in NUMERIC_SPEC_POLICIES.items() if policy.exponent is not None
+)
+
+# Kept for the (rare) caller that wants the historical single exponent.
 QUANTITY_SCALE_EXPONENT = 0.6
 
-_QUANTITY_RE = re.compile(r"^\s*([\d.]+)\s*-?\s*([a-zA-Z]*)")
+# Unit spellings seen in real vision output and real listing titles, mapped to
+# one canonical unit. Without this, "6 ft" and "6 feet" are two different
+# units and the comp gets thrown away for disagreeing with itself.
+_UNIT_ALIASES: dict[str, str] = {
+    # storage
+    "b": "b", "byte": "b",
+    "kb": "kb", "kilobyte": "kb",
+    "mb": "mb", "megabyte": "mb",
+    "gb": "gb", "gig": "gb", "gigabyte": "gb",
+    "tb": "tb", "terabyte": "tb",
+    # volume
+    "ml": "ml", "milliliter": "ml", "millilitre": "ml",
+    "l": "l", "liter": "l", "litre": "l",
+    "oz": "oz", "ounce": "oz",
+    # length
+    "mm": "mm", "millimeter": "mm", "millimetre": "mm",
+    "cm": "cm", "centimeter": "cm", "centimetre": "cm",
+    "m": "m", "meter": "m", "metre": "m",
+    "in": "in", "inch": "in", "inche": "in", '"': "in",
+    "ft": "ft", "foot": "ft", "feet": "ft", "'": "ft",
+    "yd": "yd", "yard": "yd",
+    # count
+    "pack": "pack", "pk": "pack", "pc": "pack", "pcs": "pack",
+    "piece": "pack", "count": "pack", "ct": "pack", "x": "pack",
+    "fan pack": "pack", "fan": "pack", "unit": "pack",
+}  # fmt: skip
+
+# Canonical unit -> (family, size in that family's base unit). Comparing
+# across units inside a family is just arithmetic: 1TB vs 500GB is a 2x
+# difference, not an irreconcilable one.
+_UNIT_FAMILY: dict[str, tuple[str, float]] = {
+    "b": ("storage", 1.0),
+    "kb": ("storage", 1e3),
+    "mb": ("storage", 1e6),
+    "gb": ("storage", 1e9),
+    "tb": ("storage", 1e12),
+    "ml": ("volume", 1.0),
+    "l": ("volume", 1000.0),
+    "oz": ("volume", 29.5735),
+    "mm": ("length", 1.0),
+    "cm": ("length", 10.0),
+    "m": ("length", 1000.0),
+    "in": ("length", 25.4),
+    "ft": ("length", 304.8),
+    "yd": ("length", 914.4),
+    "pack": ("count", 1.0),
+}
+
+# Anchored on purpose -- the value must be *entirely* a number plus a unit.
+# An unanchored match is how "10-in-1" became "10 inches" and "1 x 3 ft"
+# became "1 x": both parsed, both wrong, both silently repriced a comp.
+_QUANTITY_RE = re.compile(r"^\s*([\d.]+)\s*[-\s]?\s*([a-zA-Z'\" ]+?)\s*\.?\s*$")
 
 
 @dataclass(frozen=True)
@@ -58,9 +147,26 @@ class Quantity:
     amount: float
     unit: str
 
+    @property
+    def family(self) -> str:
+        return _UNIT_FAMILY[self.unit][0]
+
+    @property
+    def base_amount(self) -> float:
+        """Amount expressed in the family's base unit, so units compare."""
+        return self.amount * _UNIT_FAMILY[self.unit][1]
+
 
 def parse_quantity(value: str) -> Quantity | None:
-    """Parse a free-text amount+unit spec. None if it doesn't look like one."""
+    """Parse a free-text amount+unit spec. None if it isn't cleanly one.
+
+    Returning None is the safe answer and it means "no usable information",
+    never "different product" -- callers must not drop a comp over it. Real
+    vision output is full of values that look numeric but aren't specs
+    ("10-in-1", "40+ parts", "130 projects", "unspecified"); each one of
+    those used to either delete a good comp or reprice it against a
+    hallucinated unit.
+    """
     if not value:
         return None
     match = _QUANTITY_RE.match(value.strip())
@@ -72,29 +178,71 @@ def parse_quantity(value: str) -> Quantity | None:
         return None
     if amount <= 0:
         return None
-    return Quantity(amount, match.group(2).strip().lower().rstrip("s"))
+    raw_unit = match.group(2).strip().lower()
+    unit = _UNIT_ALIASES.get(raw_unit) or _UNIT_ALIASES.get(raw_unit.rstrip("s"))
+    if unit is None or unit not in _UNIT_FAMILY:
+        return None
+    return Quantity(amount, unit)
 
 
-# Common spec units worth pulling straight out of a title. Not exhaustive —
-# just the units actually seen on comps during dev (storage, volume, packs).
-_CAPACITY_HINT_RE = re.compile(
-    r"\b(\d+(?:\.\d+)?)\s*-?\s*(GB|TB|MB|ML|L|OZ|PACK|PK)\b", re.IGNORECASE
+# Which dimension a bare unit found in a title belongs to.
+#
+# Storage and volume both land in `capacity` -- they answer the same question
+# (how much of the stuff does it hold). The length family splits by unit
+# rather than family, and that split is load-bearing: millimetres in a
+# secondhand-goods title are practically always a *form factor* (a 120mm fan,
+# a 360mm radiator, 12mm tubing), while feet/metres/inches are practically
+# always a *length* (a 6ft cable). Routing both to `length` priced a fan's
+# size as though it were cable footage -- and worse, disagreed with what
+# vision does with the same value, so one listing got two different answers
+# depending on whether the photo or the title won.
+_UNIT_TO_ATTRIBUTE: dict[str, str] = {
+    "b": "capacity", "kb": "capacity", "mb": "capacity",
+    "gb": "capacity", "tb": "capacity",
+    "ml": "capacity", "l": "capacity", "oz": "capacity",
+    "mm": "form_factor", "cm": "form_factor",
+    "m": "length", "in": "length", "ft": "length", "yd": "length",
+    "pack": "pack_count",
+}  # fmt: skip
+
+# Units worth pulling straight out of a title, longest-first so "feet" wins
+# over "ft" and "gb" isn't eaten by "b".
+_TEXT_UNITS = sorted(_UNIT_ALIASES, key=len, reverse=True)
+# The trailing lookahead is load-bearing: without it "10-in-1" matches as
+# "10 in" (ten inches) and "1 x 3 ft" as "1 x" (a one-pack). A unit followed
+# by another number is part of a compound name, not a spec.
+_SPEC_HINT_RE = re.compile(
+    r"\b(\d+(?:\.\d+)?)\s*-?\s*("
+    + "|".join(re.escape(u) for u in _TEXT_UNITS)
+    + r")\b(?!\s*[-x/]\s*\d)",
+    re.IGNORECASE,
 )
 
 
-def capacity_from_text(text: str) -> str | None:
-    """Best-effort capacity/spec straight from a title or description.
+def specs_from_text(text: str) -> dict[str, str]:
+    """Best-effort numeric specs straight from a title or description.
 
-    Vision extraction has run-to-run variance — the same photo can come back
-    with or without a `capacity` attribute across two separate calls, even
-    when the number is stated plainly in the title ("...4GB Keypad..."). This
-    is a cheap fallback for exactly that case, not a replacement for the
-    vision attribute when it *is* present.
+    Vision extraction has run-to-run variance -- the same photo can come back
+    with or without a spec attribute across two separate calls, even when the
+    number is stated plainly in the title ("...4GB Keypad...", "...3-Pack..."),
+    so this is a cheap fallback for exactly that case. First hit per dimension
+    wins; a title's leading spec is nearly always the headline one.
     """
-    match = _CAPACITY_HINT_RE.search(text)
-    if not match:
-        return None
-    return f"{match.group(1)}{match.group(2).upper()}"
+    found: dict[str, str] = {}
+    for match in _SPEC_HINT_RE.finditer(text):
+        quantity = parse_quantity(f"{match.group(1)}{match.group(2)}")
+        if quantity is None:
+            continue
+        attribute = _UNIT_TO_ATTRIBUTE.get(quantity.unit)
+        if attribute is None or attribute in found:
+            continue
+        found[attribute] = f"{match.group(1)}{match.group(2).upper()}"
+    return found
+
+
+def capacity_from_text(text: str) -> str | None:
+    """Back-compat shim: just the `capacity` dimension of `specs_from_text`."""
+    return specs_from_text(text).get("capacity")
 
 
 RANK_CONSTANT = 20
@@ -211,29 +359,62 @@ def attributes_agree(
     return True
 
 
-def quantity_scale_factor(item_attrs: dict[str, str], comp_attrs: dict[str, str]) -> float | None:
-    """Combined price-scaling factor across SCALABLE_NUMERIC_ATTRIBUTES.
+def quantity_scale_adjustments(
+    item_attrs: dict[str, str], comp_attrs: dict[str, str]
+) -> list[SpecAdjustment]:
+    """Per-dimension breakdown of numeric spec differences.
 
-    1.0 when none of those attributes are present on both sides, or present
-    but equal (no adjustment needed). A ratio (raised to
-    QUANTITY_SCALE_EXPONENT) when they differ but parse with the same unit —
-    the caller applies this to the comp's price rather than rejecting it.
-    None when a spec is present on both sides but cannot be reconciled
-    (different units, or either side doesn't parse) — a real product
-    difference the caller should reject, not silently ignore or mis-scale.
+    One entry per dimension in NUMERIC_SPEC_POLICIES that is present on both
+    sides, parses cleanly, and differs. Entries carry `scaled=False` when the
+    dimension is captured but deliberately not priced (see SpecPolicy), so
+    the UI can show the difference without implying it moved the number.
+
+    Never rejects. A spec that doesn't parse, or that parses into a different
+    unit family than its counterpart, is *missing information* -- not
+    evidence of a different product. Treating it as a rejection is what
+    silently deleted comps whose capacity read "unspecified" or "40+ parts",
+    and what dropped a "3x" comp for disagreeing with an otherwise identical
+    "3-pack" one. Genuine "different product" rejection is HARD_ATTRIBUTES'
+    job; this function only ever adjusts prices.
     """
-    factor = 1.0
-    for key in SCALABLE_NUMERIC_ATTRIBUTES:
+    adjustments: list[SpecAdjustment] = []
+    for key, policy in NUMERIC_SPEC_POLICIES.items():
         mine_raw = item_attrs.get(key, "").strip()
         theirs_raw = comp_attrs.get(key, "").strip()
         if not mine_raw or not theirs_raw:
             continue
         mine = parse_quantity(mine_raw)
         theirs = parse_quantity(theirs_raw)
-        if mine is None or theirs is None or mine.unit != theirs.unit:
-            return None
-        if mine.amount != theirs.amount:
-            factor *= (mine.amount / theirs.amount) ** QUANTITY_SCALE_EXPONENT
+        if mine is None or theirs is None or mine.family != theirs.family:
+            continue
+        if mine.base_amount == theirs.base_amount:
+            continue
+        exponent = policy.exponent
+        scaled = exponent is not None
+        factor = (
+            (mine.base_amount / theirs.base_amount) ** exponent if exponent is not None else 1.0
+        )
+        adjustments.append(
+            SpecAdjustment(
+                feature=policy.label,
+                comp_amount=theirs_raw,
+                item_amount=mine_raw,
+                factor=factor,
+                scaled=scaled,
+            )
+        )
+    return adjustments
+
+
+def quantity_scale_factor(item_attrs: dict[str, str], comp_attrs: dict[str, str]) -> float:
+    """Combined price-scaling factor across every priced numeric dimension.
+
+    1.0 when nothing needs adjusting. See `quantity_scale_adjustments` for
+    the per-dimension breakdown this multiplies together.
+    """
+    factor = 1.0
+    for adjustment in quantity_scale_adjustments(item_attrs, comp_attrs):
+        factor *= adjustment.factor
     return factor
 
 
@@ -244,8 +425,10 @@ def apply_guards(
     score_floor: float = 0.0,
     require_price: bool = True,
 ) -> list[Comp]:
-    """Drop comps below the score floor, with a conflicting hard attribute,
-    or an irreconcilable numeric spec; scale price for a reconcilable one."""
+    """Drop comps below the score floor or with a conflicting hard attribute;
+    scale the price of the survivors toward this item's own numeric specs.
+
+    Numeric specs never cause a drop -- see `quantity_scale_adjustments`."""
     kept: list[Comp] = []
     for comp in comps:
         if require_price and (comp.price is None or comp.price <= 0):
@@ -254,17 +437,18 @@ def apply_guards(
             continue
         if not attributes_agree(item_attrs, comp.attributes):
             continue
-        factor = quantity_scale_factor(item_attrs, comp.attributes)
-        if factor is None:
-            continue
-        if factor != 1.0 and comp.price is not None:
-            scaled = comp.price * factor
-            comp = comp.model_copy(
-                update={
-                    "price": scaled,
-                    "price_note": f"scaled from ${comp.price:.2f} (x{factor:.2f})",
-                }
-            )
+        adjustments = quantity_scale_adjustments(item_attrs, comp.attributes)
+        if adjustments and comp.price is not None:
+            factor = 1.0
+            for adjustment in adjustments:
+                factor *= adjustment.factor
+            update: dict[str, Any] = {"spec_adjustments": adjustments}
+            # An unpriced dimension (form factor) still belongs in the table,
+            # but must not touch the price or claim it did.
+            if factor != 1.0:
+                update["price"] = comp.price * factor
+                update["price_note"] = f"scaled from ${comp.price:.2f} (x{factor:.2f})"
+            comp = comp.model_copy(update=update)
         kept.append(comp)
     return kept
 

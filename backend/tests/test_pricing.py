@@ -9,6 +9,8 @@ import pytest
 from sellowl.models import Condition, VerdictKind
 from sellowl.pricing import (
     DEFAULT_SHIPPING,
+    STALE_AFTER_DAYS,
+    VERY_STALE_DAYS,
     FeeConfig,
     build_verdict,
     classify,
@@ -18,6 +20,7 @@ from sellowl.pricing import (
     percentiles,
     sane_shipping,
     shipping_estimate,
+    staleness_pull,
 )
 
 # fb_ask_discount pinned to 1.0 (no haircut) so every existing test below
@@ -723,3 +726,60 @@ class TestVerdictReconciliation:
         )
         assert best_net is not None
         assert verdict.opportunity_usd == pytest.approx(best_net - verdict.current_net)
+
+
+class TestStalenessPull:
+    def test_unknown_age_never_pulls(self) -> None:
+        """A store's first analysis knows nothing about age; it must not
+        invent a discount out of that ignorance."""
+        assert staleness_pull(None) == 0.0
+
+    def test_fresh_listing_is_not_pulled(self) -> None:
+        assert staleness_pull(0) == 0.0
+        assert staleness_pull(STALE_AFTER_DAYS) == 0.0
+
+    def test_pull_grows_with_age(self) -> None:
+        assert 0.0 < staleness_pull(45) < staleness_pull(75) < 1.0
+
+    def test_caps_at_one(self) -> None:
+        assert staleness_pull(VERY_STALE_DAYS) == 1.0
+        assert staleness_pull(10_000) == 1.0
+
+
+class TestStalenessInVerdict:
+    def _verdict(self, days: int | None) -> object:
+        return build_verdict(
+            ask_price=100.0,
+            sold_prices=[80.0, 90.0, 100.0, 110.0, 120.0],
+            local_prices=[],
+            attributes={"size_class": "small"},
+            condition=Condition.USABLE,
+            fees=FEES,
+            min_comps=1,
+            days_listed=days,
+        )
+
+    def test_stale_listing_targets_lower_than_a_fresh_one(self) -> None:
+        fresh = self._verdict(0)
+        stale = self._verdict(VERY_STALE_DAYS)
+        assert stale.target is not None and fresh.target is not None
+        assert stale.target < fresh.target
+
+    def test_target_never_falls_below_the_observed_band(self) -> None:
+        """Time on market moves the recommendation *within* what real sales
+        support -- it must never invent a price below all of them."""
+        for days in (0, 45, 90, 5000):
+            verdict = self._verdict(days)
+            assert verdict.target is not None and verdict.target_low is not None
+            assert verdict.target >= verdict.target_low
+
+    def test_unknown_age_matches_fresh(self) -> None:
+        assert self._verdict(None).target == self._verdict(0).target
+
+    def test_reason_explains_the_trim(self) -> None:
+        verdict = self._verdict(120)
+        assert "120 days" in verdict.reason
+        assert verdict.days_listed == 120
+
+    def test_fresh_listing_says_nothing_about_age(self) -> None:
+        assert "days without selling" not in self._verdict(3).reason
