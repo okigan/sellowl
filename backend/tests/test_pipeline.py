@@ -209,6 +209,43 @@ class TestPipeline:
         assert job.status is JobStatus.FAILED
         assert "ACTOR_STORE" in job.error or "no parseable" in job.error
 
+    async def test_a_store_read_survives_having_no_comps(
+        self, settings: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Losing the comp sources must not throw away a successful store
+        read. Every item still renders; MIN_COMPS turns each into an honest
+        "insufficient data" rather than a fabricated band. Failing the whole
+        job here showed the user nothing at all, which is strictly worse --
+        and it happens for real whenever eBay's sold listings are behind
+        their login wall."""
+        fake = FakeApify(
+            ebay=settings.actor_store,
+            local=settings.actor_local,
+            fail={settings.actor_local},
+        )
+
+        class NoComps(ApifyCompSource):
+            async def sold_comps(self, *a: Any, **k: Any) -> list[dict[str, Any]]:
+                return []
+
+            async def local_comps(self, *a: Any, **k: Any) -> list[dict[str, Any]]:
+                return []
+
+        monkeypatch.setattr(
+            "sellowl.jobs.make_source", lambda s: NoComps(s, client=cast(Any, fake))
+        )
+
+        async def no_photos(url: str, **kwargs: Any) -> None:
+            return None
+
+        monkeypatch.setattr("sellowl.jobs.fetch_bytes", no_photos)
+        job = await run_job(settings)
+        assert job.status is JobStatus.DONE, job.error
+        assert job.items, "the store read must survive"
+        assert all(
+            i.verdict is None or i.verdict.kind is VerdictKind.INSUFFICIENT_DATA for i in job.items
+        )
+
     async def test_min_comps_guard_bites(self, settings: Settings, patched: FakeApify) -> None:
         """With an unreachable threshold, nothing gets a fabricated band."""
         strict = settings.model_copy(update={"min_comps": 99})

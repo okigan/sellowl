@@ -269,13 +269,22 @@ class Pipeline:
         local_rows = [row for batch in results[len(sold_queries) :] for row in batch]
 
         comps = parse_sold_comps(sold_rows, job.job_id) + parse_local_comps(local_rows, job.job_id)
-        # Nothing new is fine when the corpus already covers every query --
-        # that is the whole point of the check above. It is only fatal when we
-        # actually went looking and came back empty-handed.
-        if not comps and len(skip) < len(wanted):
-            raise RuntimeError(
-                "Both comp sources returned nothing usable — cannot price anything. "
-                "Check the Apify runs for blocking."
+        # No comps is not a reason to throw away a successful store read.
+        # Every item still renders, and the MIN_COMPS guard turns each one
+        # into an honest "insufficient data" rather than a fabricated band --
+        # strictly more useful than failing the job and showing nothing. This
+        # is the real state of things whenever eBay's sold listings sit behind
+        # their sign-in wall, which is most of the time without a session.
+        if not comps and not skip:
+            log.warning(
+                "no_comps_available",
+                source=self._s.comp_source,
+                hint=(
+                    "eBay requires a signed-in session for sold listings: run "
+                    "`uv run python scripts/browser_login.py` once"
+                    if self._s.comp_source == "browser"
+                    else "check the scraper runs for blocking"
+                ),
             )
         log.info(
             "comps_fetched",
