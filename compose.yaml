@@ -22,6 +22,19 @@ services:
     depends_on:
       - backend
 
+  # Vectors for SEARCH_BACKEND=sqlite. Started only with
+  # `docker compose --profile selfhosted up`, because the default (Elastic)
+  # path doesn't need it. See docs/MIGRATION.md.
+  embeddings:
+    profiles: ["selfhosted"]
+    build: ./embeddings
+    ports: ["8080:8080"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   # Offline only: `docker compose --profile local-es up`.
   # Note semantic_text needs an inference endpoint configured, so this is not a
   # drop-in substitute for Serverless. See docs/DEVELOP.md.

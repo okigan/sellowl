@@ -1,11 +1,54 @@
-# Migration off Apify and Elastic — planning doc
+# Migration off Apify and Elastic
 
-**Status: planning only. No code changes yet.** SellOwl was built for the
-Apify × Elastic Hack Night and the submitted entry genuinely uses both end
-to end — this document is a forward-looking option, not a decision to rip
-either one out. If/when this app needs to run indefinitely (cost, rate
-limits, or just wanting fewer hosted dependencies), here's what that looks
-like.
+**Status: Elastic migration started (step 1 of 3 done). Apify migration is
+still planning-only.** SellOwl was built for the Apify × Elastic Hack Night
+and the submitted entry genuinely uses both end to end; this document is now
+half plan, half build log.
+
+| Step | State |
+|---|---|
+| `SqliteCompStore` behind the existing `CompStore` protocol | **Done** (`sqlite_store.py`) |
+| Run side-by-side behind a config flag | **Done** (`SEARCH_BACKEND=elastic\|sqlite`) |
+| Compare match quality on the same store, then flip the default | **Not started** |
+| Anything touching Apify | Not started |
+
+## What shipped for the Elastic migration
+
+- **`SqliteCompStore`** — FTS5 for BM25 (SQLite ships it; same ranking
+  function Elastic uses for the keyword half) plus brute-force cosine over
+  stored vectors. No ANN index: a job retrieves over hundreds of comps, so
+  scanning every vector is milliseconds and avoids a dependency and its
+  tuning. Fusion reuses `match.rrf_fuse`, which already existed as the
+  fallback for clusters without `retriever`/`rrf` — the Python half of hybrid
+  search predates this migration and was already exercised.
+- **`embeddings.py`** — an `Embedder` protocol with two implementations.
+  `OpenAIEmbedder` calls any OpenAI-compatible `/v1/embeddings`;
+  `HashingEmbedder` (the default) needs no service, no model download and no
+  new dependency, so tests and offline runs work with nothing alongside.
+  `HashingEmbedder` is explicitly lexical, not semantic — hashed character
+  n-grams catch "radiator"/"radiators" and nothing deeper. Naming that
+  honestly matters: a fake semantic layer that silently scores badly is
+  worse than an obviously lexical one.
+- **An embeddings container** (`embeddings/`, compose profile `selfhosted`)
+  running **BAAI/bge-small-en-v1.5** via fastembed on CPU — 384-dim, ~133MB,
+  near the top of MTEB retrieval for its size. ONNX Runtime, so no torch and
+  no CUDA in the image. The model is baked in at build time so the first
+  request isn't a download.
+
+**Why a container rather than the existing local model server:** nvbox
+proxies only `/v1/chat/completions`, `/v1/messages` and
+`/v1/images/generations` — it has no embeddings route, so loading an
+embedding model there would leave no way to call it. That is expected to
+change; when it does, switching is one env var (`EMBEDDING_BASE_URL`),
+because `OpenAIEmbedder` doesn't care which server answers.
+
+**One correctness note worth not losing:** bge/e5-family models are
+*asymmetric* — the query side wants an instruction prefix, the document side
+does not. Embedding both identically still returns results, just quietly
+worse ones, so `Embedder` separates `embed` from `embed_query` rather than
+leaving each call site to remember.
+
+## Why this might matter later
 
 ## Why this might matter later
 

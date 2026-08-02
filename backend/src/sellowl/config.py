@@ -86,6 +86,20 @@ class Settings(BaseSettings):
     # rates above.
     fb_ask_discount: float = 0.85
 
+    # --- search backend --------------------------------------------------
+    # "elastic" (default, what the hack-night entry ships) or "sqlite" (the
+    # self-hosted path in docs/MIGRATION.md: FTS5 BM25 + brute-force vectors,
+    # no cluster). Both implement the same CompStore protocol, so this is the
+    # only switch needed to compare them on the same store.
+    search_backend: str = "elastic"
+    sqlite_db_path: str = ".cache/comps.db"
+    # Embeddings for the sqlite backend. Blank base_url uses the built-in
+    # dependency-free hashing embedder -- see embeddings.py for why that is a
+    # deliberately lexical stand-in and not a claim of semantics.
+    embedding_base_url: str = ""
+    embedding_api_key: str = ""
+    embedding_model: str = ""
+
     # --- elastic ---------------------------------------------------------
     index_prefix: str = "sellowl"
     # Flipped to False by the phase-0 check if the cluster predates the

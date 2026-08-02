@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from pathlib import Path
 from typing import Any
 
 import structlog
+from openai import AsyncOpenAI
 
 from .config import Settings
+from .embeddings import Embedder, HashingEmbedder, OpenAIEmbedder
 from .index import CompStore, ElasticCompStore, MemoryCompStore
 from .logging import get_logger
 from .match import apply_guards, matched_prices, specs_from_text
@@ -31,12 +34,16 @@ from .sources import (
     store_actor_payload,
     upstream_error,
 )
+from .sqlite_store import SqliteCompStore
 from .vision import VisionGrader
 
 log = get_logger(__name__)
 
 
 def make_store(settings: Settings) -> CompStore:
+    if settings.search_backend == "sqlite":
+        log.info("search_backend", backend="sqlite", db=settings.sqlite_db_path)
+        return SqliteCompStore(Path(settings.sqlite_db_path), embedder=make_embedder(settings))
     if settings.elastic_configured:
         return ElasticCompStore(
             settings.elasticsearch_endpoint,
@@ -46,6 +53,18 @@ def make_store(settings: Settings) -> CompStore:
         )
     log.warning("elastic_not_configured", fallback="in-memory matching (demo will be weaker)")
     return MemoryCompStore()
+
+
+def make_embedder(settings: Settings) -> Embedder:
+    if settings.embedding_base_url and settings.embedding_model:
+        return OpenAIEmbedder(
+            AsyncOpenAI(
+                base_url=settings.embedding_base_url,
+                api_key=settings.embedding_api_key or "unused",
+            ),
+            settings.embedding_model,
+        )
+    return HashingEmbedder()
 
 
 class JobRegistry:
