@@ -139,7 +139,8 @@ class Pipeline:
         job.stage = JobStage(name="reading_photos", total=len(items))
         photos = await asyncio.gather(*(fetch_bytes(i.photo_url) for i in items))
         results = await grader.grade_many(
-            [(photo, item.title) for photo, item in zip(photos, items, strict=True)]
+            [(photo, item.title) for photo, item in zip(photos, items, strict=True)],
+            identities=[f"item:{item.external_id}" for item in items],
         )
         for item, result in zip(items, results, strict=True):
             # A photo grade beats nothing; the seller's own listed condition
@@ -285,14 +286,33 @@ class Pipeline:
     async def _rerank(
         self, comps: list[Comp], grader: VisionGrader, cache: dict[str, VisionResult]
     ) -> list[Comp]:
-        todo = [c for c in comps if c.doc_id not in cache and c.photo_url]
-        if todo and grader.enabled:
-            photos = await asyncio.gather(*(fetch_bytes(c.photo_url) for c in todo))
-            results = await grader.grade_many(
-                [(photo, comp.title) for photo, comp in zip(photos, todo, strict=True)]
-            )
-            for comp, result in zip(todo, results, strict=True):
-                cache[comp.doc_id] = result
+        pending = [c for c in comps if c.doc_id not in cache and c.photo_url]
+        if pending and grader.enabled:
+            # Check the disk cache BEFORE downloading anything. A comp's photo
+            # is keyed by its listing id, so a previously-graded comp costs no
+            # network at all -- this used to re-fetch every comp photo on every
+            # run purely to compute a byte-hash cache key it already had the
+            # answer for, which is what made re-analyzing a store slow.
+            todo: list[Comp] = []
+            for comp in pending:
+                hit = grader.cached_grade(grader.reference_key(comp.doc_id, comp.title))
+                if hit is not None:
+                    cache[comp.doc_id] = hit
+                else:
+                    todo.append(comp)
+            if todo:
+                log.info(
+                    "rerank_vision",
+                    to_grade=len(todo),
+                    skipped_download=len(pending) - len(todo),
+                )
+                photos = await asyncio.gather(*(fetch_bytes(c.photo_url) for c in todo))
+                results = await grader.grade_many(
+                    [(photo, comp.title) for photo, comp in zip(photos, todo, strict=True)],
+                    identities=[comp.doc_id for comp in todo],
+                )
+                for comp, result in zip(todo, results, strict=True):
+                    cache[comp.doc_id] = result
 
         out: list[Comp] = []
         for comp in comps:

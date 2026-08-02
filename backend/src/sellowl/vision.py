@@ -221,22 +221,75 @@ class VisionGrader:
     def enabled(self) -> bool:
         return self._anthropic is not None or self._openai is not None
 
-    async def grade(self, photo: bytes | None, title: str) -> VisionResult:
+    def _key(self, *parts: str) -> str:
+        return cache_key("vision_grade", _PROMPT_VERSION, self._provider, self._model, *parts)
+
+    def reference_key(self, identity: str, title: str) -> str:
+        """Key for "this listing / this URL", answerable without a download.
+
+        A grade depends on (image, model, prompt) and the honest key for the
+        image is its content hash -- but that can only be computed *after*
+        fetching the image, which is most of the cost this cache exists to
+        avoid. Every re-analyze was re-downloading several hundred comp photos
+        purely to compute keys it already had answers for.
+
+        A listing id (or a photo URL) is known for free and the photo behind
+        it doesn't change, so it answers the common case at zero network cost.
+        The title is in the key because it is interpolated into the prompt.
+        """
+        return self._key("ref", identity, title)
+
+    def content_key(self, photo: bytes, title: str) -> str:
+        """Key for "this exact image", regardless of where it came from.
+
+        The second half of the pair: eBay and Facebook serve the same picture
+        under different (and, for FB, expiring signed) URLs, and sellers
+        relist the same photo under a new id. Those all miss the reference key
+        and would be re-graded despite being byte-identical to something
+        already known.
+        """
+        return self._key("content", hashlib.sha256(photo).hexdigest(), title)
+
+    def cached_grade(self, key: str | None) -> VisionResult | None:
+        """A previously-stored grade, or None."""
+        if key is None or self._cache_ttl_s <= 0:
+            return None
+        cached = cache_get(key, ttl_seconds=self._cache_ttl_s, cache_dir=VISION_CACHE_DIR)
+        return VisionResult.model_validate(cached) if cached is not None else None
+
+    def _remember(self, result: VisionResult, *keys: str | None) -> None:
+        if self._cache_ttl_s <= 0:
+            return
+        payload = result.model_dump(mode="json")
+        for key in keys:
+            if key is not None:
+                cache_set(key, payload, cache_dir=VISION_CACHE_DIR)
+
+    async def grade(
+        self, photo: bytes | None, title: str, *, identity: str | None = None
+    ) -> VisionResult:
         """Grade one photo. Never raises: a failed grade degrades one row.
 
-        Comp photos repeat heavily across re-analyzes of the same store (the
-        same eBay sold / Facebook comps get retrieved every time), and each
-        call costs a couple of seconds — cached on disk like Apify runs.
+        Two-level cache. The reference key (listing id / URL) is checked first
+        because it costs no network; the content key catches the same image
+        arriving from a different URL. A content hit writes the reference key
+        back, so the next run for that listing skips the download too.
         """
         if not self.enabled or not photo:
             return _fallback(title)
 
-        digest = hashlib.sha256(photo).hexdigest()
-        key = cache_key("vision_grade", _PROMPT_VERSION, self._provider, self._model, digest, title)
-        if self._cache_ttl_s > 0:
-            cached = cache_get(key, ttl_seconds=self._cache_ttl_s, cache_dir=VISION_CACHE_DIR)
-            if cached is not None:
-                return VisionResult.model_validate(cached)
+        ref_key = self.reference_key(identity, title) if identity else None
+        cached_result = self.cached_grade(ref_key)
+        if cached_result is not None:
+            return cached_result
+
+        content_key = self.content_key(photo, title)
+        cached_result = self.cached_grade(content_key)
+        if cached_result is not None:
+            # Same picture, new URL or new listing id. Alias it so this
+            # listing is answerable without a download next time.
+            self._remember(cached_result, ref_key)
+            return cached_result
 
         async with self._sem:
             try:
@@ -254,8 +307,7 @@ class VisionGrader:
             result.canonical_description = title
         if not result.search_query_broad:
             result.search_query_broad = _broad_from_title(title)
-        if self._cache_ttl_s > 0:
-            cache_set(key, result.model_dump(mode="json"), cache_dir=VISION_CACHE_DIR)
+        self._remember(result, ref_key, content_key)
         return result
 
     async def _grade_anthropic(self, client: AsyncAnthropic, photo: bytes, title: str) -> str:
@@ -300,8 +352,21 @@ class VisionGrader:
         )
         return response.choices[0].message.content or ""
 
-    async def grade_many(self, photos: list[tuple[bytes | None, str]]) -> list[VisionResult]:
-        return list(await asyncio.gather(*(self.grade(p, t) for p, t in photos)))
+    async def grade_many(
+        self,
+        photos: list[tuple[bytes | None, str]],
+        *,
+        identities: list[str | None] | None = None,
+    ) -> list[VisionResult]:
+        ids: list[str | None] = identities or [None] * len(photos)
+        return list(
+            await asyncio.gather(
+                *(
+                    self.grade(photo, title, identity=identity)
+                    for (photo, title), identity in zip(photos, ids, strict=True)
+                )
+            )
+        )
 
 
 def _fallback(title: str) -> VisionResult:

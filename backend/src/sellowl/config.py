@@ -35,7 +35,14 @@ class Settings(BaseSettings):
     vision_model: str = ""
     # Comp photos repeat heavily across re-analyzes of the same store; cache
     # grades on disk like Apify runs. 0 disables. DELETE /api/cache clears it.
-    vision_cache_ttl_hours: float = 20.0
+    #
+    # 30 days, not hours: a grade is a function of (image, model, prompt), and
+    # none of those drift on their own -- a used drive's photo doesn't change
+    # because a day passed. The prompt is hashed into the key, so editing it
+    # invalidates entries immediately regardless of TTL, which is the only
+    # staleness that actually matters here. A short TTL just bought re-running
+    # hundreds of identical model calls for nothing.
+    vision_cache_ttl_hours: float = 24.0 * 30
 
     # --- actor slugs -----------------------------------------------------
     # Config, not constants: swapping a failed actor mid-event must be an env
@@ -61,7 +68,13 @@ class Settings(BaseSettings):
     apify_timeout_s: float = 480.0
     # Apify runs are the slow part (minutes) and idempotent for a given
     # (actor, payload). Cache their results on disk; 0 disables caching.
-    apify_cache_ttl_hours: float = 20.0
+    #
+    # 7 days. Unlike vision grades this genuinely does go stale -- new comps
+    # get listed and sold -- but a week-old comp set still prices an item far
+    # better than a failed run does, and quota is finite (see the stale-cache
+    # fallback in sources/apify.py, which serves even expired entries rather
+    # than failing a job).
+    apify_cache_ttl_hours: float = 24.0 * 7
 
     # --- fees ------------------------------------------------------------
     # Category-dependent approximations, not gospel. See docs/DESIGN.md.

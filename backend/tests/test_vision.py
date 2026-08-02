@@ -165,3 +165,79 @@ class TestVisionGraderCaching:
         monkeypatch.setattr("sellowl.vision._PROMPT_VERSION", "a-different-version")
         await g.grade(photo, "vintage bowl")
         assert fake.calls == 2
+
+
+class TestTwoLevelVisionCache:
+    """Two keys per grade: a reference key (listing id / URL) answerable with
+    no download at all, and a content key that catches the same picture
+    arriving from a different URL. See VisionGrader.grade."""
+
+    @pytest.fixture
+    def grader(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[VisionGrader, FakeOpenAI]:
+        monkeypatch.setattr("sellowl.vision.VISION_CACHE_DIR", tmp_path)
+        settings = Settings(
+            vision_provider="openai",
+            vision_base_url="http://fake",
+            vision_api_key="fake",
+            vision_model="fake-model",
+            vision_cache_ttl_hours=1.0,
+        )
+        g = VisionGrader(settings)
+        fake = FakeOpenAI('{"canonical_description": "a teak bowl", "condition": "clean"}')
+        g._openai = fake  # type: ignore[assignment]
+        return g, fake
+
+    async def test_second_run_needs_no_photo_at_all(
+        self, grader: tuple[VisionGrader, FakeOpenAI]
+    ) -> None:
+        """The bug this fixes: every re-analyze re-downloaded hundreds of comp
+        photos purely to compute a byte-hash key it already had answers for."""
+        g, fake = grader
+        photo = b"\xff\xd8\xff jpeg"
+        await g.grade(photo, "a drive", identity="ebay_sold:123")
+        assert fake.calls == 1
+        # No photo needed to answer the second time.
+        assert g.cached_grade(g.reference_key("ebay_sold:123", "a drive")) is not None
+
+    async def test_same_image_new_url_is_not_regraded(
+        self, grader: tuple[VisionGrader, FakeOpenAI]
+    ) -> None:
+        """FB serves the same picture under expiring signed URLs, and sellers
+        relist the same photo under a new id."""
+        g, fake = grader
+        photo = b"\xff\xd8\xff jpeg"
+        await g.grade(photo, "a drive", identity="fb_local:OLD")
+        await g.grade(photo, "a drive", identity="fb_local:NEW")
+        assert fake.calls == 1
+
+    async def test_content_hit_writes_back_the_reference_key(
+        self, grader: tuple[VisionGrader, FakeOpenAI]
+    ) -> None:
+        """So the *next* run skips the download too, not just the model call."""
+        g, _ = grader
+        photo = b"\xff\xd8\xff jpeg"
+        await g.grade(photo, "a drive", identity="fb_local:OLD")
+        assert g.cached_grade(g.reference_key("fb_local:NEW", "a drive")) is None
+        await g.grade(photo, "a drive", identity="fb_local:NEW")
+        assert g.cached_grade(g.reference_key("fb_local:NEW", "a drive")) is not None
+
+    async def test_different_listings_with_different_photos_both_graded(
+        self, grader: tuple[VisionGrader, FakeOpenAI]
+    ) -> None:
+        g, fake = grader
+        await g.grade(b"\xff\xd8\xff one", "a drive", identity="ebay_sold:1")
+        await g.grade(b"\xff\xd8\xff two", "a drive", identity="ebay_sold:2")
+        assert fake.calls == 2
+
+    async def test_title_still_separates_entries(
+        self, grader: tuple[VisionGrader, FakeOpenAI]
+    ) -> None:
+        """The title is interpolated into the prompt, so the same photo under
+        two titles is genuinely two different requests."""
+        g, fake = grader
+        photo = b"\xff\xd8\xff jpeg"
+        await g.grade(photo, "vintage bowl", identity="ebay_sold:1")
+        await g.grade(photo, "modern vase", identity="ebay_sold:1")
+        assert fake.calls == 2
