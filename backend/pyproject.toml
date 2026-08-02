@@ -13,6 +13,7 @@ dependencies = [
     "anthropic>=0.40",
     "structlog>=26.1.0",
     "openai>=2.52.0",
+    "playwright>=1.62.0",
 ]
 
 [dependency-groups]

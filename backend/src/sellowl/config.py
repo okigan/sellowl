@@ -44,6 +44,20 @@ class Settings(BaseSettings):
     # hundreds of identical model calls for nothing.
     vision_cache_ttl_hours: float = 24.0 * 30
 
+    # --- scraping --------------------------------------------------------
+    # "browser" (self-hosted Playwright, no third party) or "apify".
+    comp_source: str = "browser"
+    # Deliberately slow. This is someone else's infrastructure, the whole job
+    # is a few dozen page loads per store, and there is no version of "faster"
+    # worth getting blocked for.
+    scrape_min_interval_s: float = 8.0
+    scrape_settle_ms: int = 2500
+    scrape_headless: bool = False
+    # Persistent browser profile. Its real purpose: eBay puts sold/completed
+    # listings behind a login, so a human can sign in once by hand and have
+    # the session stick. The app never handles credentials.
+    scrape_profile_dir: str = ".cache/browser-profile"
+
     # --- actor slugs -----------------------------------------------------
     # Config, not constants: swapping a failed actor mid-event must be an env
     # change and a restart, never a code change.

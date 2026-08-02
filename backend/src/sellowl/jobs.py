@@ -28,6 +28,7 @@ from .sightings import record_sightings
 from .sources import (
     ApifyCompSource,
     CompSource,
+    EbayBrowserSource,
     fetch_bytes,
     parse_local_comps,
     parse_sold_comps,
@@ -56,8 +57,9 @@ def make_store(settings: Settings) -> CompStore:
 
 
 def make_source(settings: Settings) -> CompSource:
-    """Only one implementation today; see sources/protocol.py for why the two
-    other legs are not equally replaceable."""
+    """See sources/protocol.py for why the three legs differ in replaceability."""
+    if settings.comp_source == "browser":
+        return EbayBrowserSource(settings)
     return ApifyCompSource(settings)
 
 
