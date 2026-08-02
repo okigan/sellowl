@@ -1,8 +1,9 @@
 # Migration off Apify and Elastic
 
-**Status: Elastic migration done. Apify migration is still planning-only.**
-The project originally ran on both end to end; this document is now half
-build log, half plan for the half that hasn't moved.
+**Status: off Elastic entirely. Off Apify for everything except eBay sold
+comps (which need a signed-in session) and Facebook Marketplace (no API).**
+The project originally ran on both end to end; this document is now mostly
+build log.
 
 | Step | State |
 |---|---|
@@ -10,7 +11,9 @@ build log, half plan for the half that hasn't moved.
 | Run side-by-side behind a config flag | **Done** (`SEARCH_BACKEND=elastic\|sqlite`) |
 | Compare match quality on the same store | **Done — inconclusive, see below** |
 | Flip the default | **Done** — `sqlite`, on cost |
-| Anything touching Apify | Not started |
+| eBay store listings off Apify | **Done** — self-hosted browser scraper |
+| eBay sold comps off Apify | **Blocked** — eBay requires a signed-in session |
+| Facebook Marketplace off Apify | **Not done** — no API, login-walled |
 
 ## What shipped for the Elastic migration
 
@@ -184,7 +187,49 @@ preferred) behind the existing `CompStore` protocol, run it side-by-side
 with `ElasticCompStore` behind a config flag, compare match quality on the
 same store for a few runs, then flip the default.
 
-## Migrating off Apify
+## Migrating off Apify — what was actually found
+
+`COMP_SOURCE=browser` is the default and runs a self-hosted Playwright
+scraper (`sources/browser.py`). Verified against a store never scraped
+before: 60 listings, zero Apify calls.
+
+**Plain HTTP is not an option.** eBay answers httpx with a soft
+"Error Page | eBay" on the *first* request, before any rate limit could
+apply — fingerprinting, not throttling. Headless-shell browsers get the same.
+What works is behaving like a browser: land on the homepage, let cookies
+settle, then navigate. That took a blocked request to 62 result cards.
+
+**The anti-bot plugin works, and that is how we learned the real limit.**
+The same sold-listings request, three ways:
+
+| Driver | Response |
+|---|---|
+| plain playwright | `Security Measure \| eBay` (bot block) |
+| + playwright-stealth | `Sign in or Register \| eBay` (auth gate) |
+| patchright | `Sign in or Register \| eBay` (same) |
+
+Stealth defeats the bot detection. It cannot defeat an authentication
+requirement, and that is what guards sold listings. The two look identical
+from outside, which is exactly why it was worth measuring rather than
+assuming — one is an engineering problem, the other is a login.
+
+**So sold comps need a session.** `scripts/browser_login.py` opens the
+persistent profile and waits for a human to sign in by hand; nothing in this
+codebase reads, types, stores or transmits credentials, and only the
+browser's own cookie jar persists. Until that is done a run reads the store
+fine and every item is honestly marked "insufficient data" — which is why
+the pipeline no longer fails when comps are missing.
+
+**Volume is deliberately low.** One page at a time behind a lock, an 8s floor
+between fetches, one warmed context reused. A whole store is a few dozen page
+loads. There is no version of "faster" worth being blocked for.
+
+**Facebook Marketplace is not migrated** and may never be worth migrating:
+no official API, login-walled, heavily JS-driven. It was also 51% of the
+Apify bill for data the spread guard discards a third of the time. The
+browser source returns empty for it and says so.
+
+## Migrating off Apify — the original plan
 
 **Difficulty: medium-to-high, and uneven across the three actors.** This is
 the harder migration, and eBay vs. Facebook Marketplace are not
