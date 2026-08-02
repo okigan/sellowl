@@ -32,6 +32,7 @@ Known limits, both structural rather than bugs to fix later:
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from typing import Any
 
@@ -77,6 +78,17 @@ _EXTRACT = """() => {
   }
   return out;
 }"""
+
+
+# eBay serves WebP to a modern browser, and the vision model rejects it
+# ("Failed to load image or audio file") -- the Apify actor happened to return
+# JPEG, so this only surfaced after the migration. eBay's image URLs encode
+# the format in the filename, so asking for JPEG is a rename, not a re-encode.
+_EBAY_IMG_RE = re.compile(r"(https://i\.ebayimg\.com/\S+?)\.webp\b", re.IGNORECASE)
+
+
+def as_jpeg(url: str) -> str:
+    return _EBAY_IMG_RE.sub(r"\1.jpg", url or "")
 
 
 def _usable(row: dict[str, Any]) -> bool:
@@ -180,6 +192,8 @@ class BrowserScraper:
                     log.warning("scrape_blocked", url=url[:90], status=response.status)
                     return []
                 rows = [r for r in await page.evaluate(_EXTRACT) if _usable(r)]
+                for r in rows:
+                    r["image"] = as_jpeg(r["image"])
                 log.info("scraped", url=url[:90], rows=len(rows))
                 return rows
             finally:
