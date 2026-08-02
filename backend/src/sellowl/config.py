@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     # Concurrent Apify runs. One run per comp query, so this bounds fan-out.
     comp_concurrency: int = 5
     sold_days_back: int = 90
+    # Ask the comp store before paying a scraper. The store persists across
+    # jobs, so re-analysing a store re-bought data already on disk -- ~22% of
+    # one month's Apify spend went on queries already answered.
+    corpus_first: bool = True
+    # A comp older than this doesn't count toward "we already have enough",
+    # because sold prices drift. It is still usable for pricing if a scrape
+    # then fails; this only governs whether we bother scraping at all.
+    corpus_max_age_days: int = 30
     match_score_floor: float = 0.0
     apify_timeout_s: float = 480.0
     # Apify runs are the slow part (minutes) and idempotent for a given

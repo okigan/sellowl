@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -111,7 +112,7 @@ class Pipeline:
 
             items = await self._stage_inventory(job, apify)
             await self._stage_vision(job, grader, items)
-            comps = await self._stage_comps(job, apify, items)
+            comps = await self._stage_comps(job, apify, items, store)
             await self._stage_index(job, store, comps)
             await self._stage_match(job, store, grader, items)
 
@@ -188,14 +189,60 @@ class Pipeline:
             item.vision = result
             job.stage.done += 1
 
-    async def _stage_comps(self, job: Job, apify: ApifyClient, items: list[Item]) -> list[Comp]:
-        """One actor run per query, bounded.
+    async def _covered_by_corpus(self, store: CompStore, query: str, venue: Venue) -> bool:
+        """True when we already hold enough fresh, relevant comps for this query.
+
+        Scraping is the expensive half of a run (~$0.19 per query per venue,
+        and the two dropped actors aside, ~22% of one month's spend went on
+        re-buying queries already answered). The comp store persists across
+        jobs, so re-analysing a store -- the normal case -- was paying again
+        for data sitting on disk.
+
+        "Enough" is measured after the relevance floor, so a corpus full of
+        near-misses does not count as coverage. "Fresh" matters because sold
+        prices drift; comps older than `corpus_max_age_days` are ignored for
+        the purpose of skipping a scrape, even though they still get used in
+        pricing if the scrape then fails.
+        """
+        if not self._s.corpus_first:
+            return False
+        try:
+            existing = await store.find_comps(
+                bm25_query=query,
+                semantic_query=query,
+                venue=venue,
+                size=self._s.rerank_top_k,
+                job_id="",
+            )
+        except Exception as exc:  # noqa: BLE001 - a store miss must not stop a scrape
+            log.warning("corpus_check_failed", error=str(exc))
+            return False
+        cutoff = datetime.now(UTC) - timedelta(days=self._s.corpus_max_age_days)
+        fresh = [c for c in existing if c.scraped_at >= cutoff]
+        return len(fresh) >= self._s.rerank_top_k
+
+    async def _stage_comps(
+        self, job: Job, apify: ApifyClient, items: list[Item], store: CompStore
+    ) -> list[Comp]:
+        """One actor run per query, bounded, and only for what we lack.
 
         Not one batched run: `maxItems` is a global cap, so a batch lets the
         first query eat the whole budget and starve the rest.
         """
         queries = _queries_for(items)
-        job.stage = JobStage(name="finding_comps", total=len(queries) * 2)
+        wanted: list[tuple[str, Venue]] = [
+            (q, v) for q in queries for v in (Venue.EBAY_SOLD, Venue.FB_LOCAL)
+        ]
+        covered = await asyncio.gather(*(self._covered_by_corpus(store, q, v) for q, v in wanted))
+        skip = {pair for pair, hit in zip(wanted, covered, strict=True) if hit}
+        if skip:
+            log.info(
+                "corpus_first_skipped_scrapes",
+                skipped=len(skip),
+                of=len(wanted),
+                saved_usd=round(len(skip) * 0.19, 2),
+            )
+        job.stage = JobStage(name="finding_comps", total=len(wanted) - len(skip))
         gate = asyncio.Semaphore(self._s.comp_concurrency)
 
         async def one(actor: str, payload: dict[str, Any], limit: int) -> list[dict[str, Any]]:
@@ -209,25 +256,30 @@ class Pipeline:
                     job.stage.done += 1
 
         limit = self._s.max_comps_per_query
+        sold_queries = [q for q in queries if (q, Venue.EBAY_SOLD) not in skip]
+        local_queries = [q for q in queries if (q, Venue.FB_LOCAL) not in skip]
         sold_runs = [
             one(
                 self._s.actor_sold,
                 sold_actor_payload(q, limit, self._s.sold_days_back),
                 limit,
             )
-            for q in queries
+            for q in sold_queries
         ]
         local_runs = [
             one(self._s.actor_local, local_actor_payload(job.metro, q, limit), limit)
-            for q in queries
+            for q in local_queries
         ]
 
         results = await asyncio.gather(*sold_runs, *local_runs)
-        sold_rows = [row for batch in results[: len(queries)] for row in batch]
-        local_rows = [row for batch in results[len(queries) :] for row in batch]
+        sold_rows = [row for batch in results[: len(sold_queries)] for row in batch]
+        local_rows = [row for batch in results[len(sold_queries) :] for row in batch]
 
         comps = parse_sold_comps(sold_rows, job.job_id) + parse_local_comps(local_rows, job.job_id)
-        if not comps:
+        # Nothing new is fine when the corpus already covers every query --
+        # that is the whole point of the check above. It is only fatal when we
+        # actually went looking and came back empty-handed.
+        if not comps and len(skip) < len(wanted):
             raise RuntimeError(
                 "Both comp sources returned nothing usable — cannot price anything. "
                 "Check the Apify runs for blocking."
