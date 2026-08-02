@@ -61,6 +61,20 @@ Return ONLY a JSON object, no prose, with exactly these keys:
                          words (e.g. "USB flash drive", "padlock", "case
                          fan", "radiator"). Keep it short and generic, not a
                          precise model description.
+                         size_class  The size of the SHIPPING BOX this item
+                         would travel in, not the item's own length or a
+                         number printed on it. A coiled cable, cord, or strap
+                         ships in a small padded envelope no matter how many
+                         feet long it is -- an "8 ft cable" is size_class
+                         "small", the same as a keychain or a USB drive.
+                         small   = fits in a padded envelope (cables, small
+                                   electronics, jewelry, keys, cards)
+                         medium  = fits in a shoebox-sized box (shoes, small
+                                   appliances, stacked cable multi-packs)
+                         large   = a large box, hand-carryable (desktop fans,
+                                   monitors, small furniture)
+                         xlarge  = requires freight or two hands and a cart
+                                   (furniture, large appliances, radiators)
                          model  The specific product line or generation
                          printed on the item or packaging, if legible (e.g.
                          "Aegis Secure Key 3NX", "Riing Trio", "Pacific
