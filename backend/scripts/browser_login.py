@@ -36,6 +36,8 @@ async def main() -> None:
     if not profile:
         raise SystemExit("SCRAPE_PROFILE_DIR is empty; set it so the session can persist.")
 
+    print("NOTE: the profile is single-writer -- stop the server first if it is running:")
+    print("      pkill -f 'uvicorn sellowl.main:app'\n")
     print(f"Opening a browser using profile: {profile}")
     print("Sign in to eBay in the window that opens, then come back here and press Enter.")
     print("(Nothing in this script touches your credentials.)\n")

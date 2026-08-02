@@ -104,13 +104,26 @@ class BrowserScraper:
         if profile:
             # Persistent so a human-performed eBay login survives restarts;
             # see the module docstring on sold listings.
-            self._ctx = await self._pw.chromium.launch_persistent_context(
-                profile,
-                headless=self._s.scrape_headless,
-                locale="en-US",
-                viewport={"width": 1440, "height": 900},
-                user_agent=_UA,
-            )
+            try:
+                self._ctx = await self._pw.chromium.launch_persistent_context(
+                    profile,
+                    headless=self._s.scrape_headless,
+                    locale="en-US",
+                    viewport={"width": 1440, "height": 900},
+                    user_agent=_UA,
+                )
+            except Exception as exc:
+                # A persistent profile is single-writer. Chromium reports this
+                # as "Opening in existing browser session", which reads like a
+                # success and buries the real cause -- and it is exactly what
+                # happens when someone runs scripts/browser_login.py while the
+                # server is up, i.e. the first thing anyone will try.
+                raise RuntimeError(
+                    f"Browser profile {profile!r} is already in use by another process "
+                    "(the running server, or a leftover browser). Stop that first: "
+                    "`pkill -f 'uvicorn sellowl.main:app'`. "
+                    f"Original error: {exc}"
+                ) from exc
         else:
             self._browser = await self._pw.chromium.launch(headless=self._s.scrape_headless)
             self._ctx = await self._browser.new_context(
