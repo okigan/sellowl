@@ -79,6 +79,11 @@ async def health() -> dict[str, object]:
         )
         if settings.search_backend == "sqlite"
         else "",
+        # What is actually fetching listings, not what happens to be
+        # configured. An APIFY_TOKEN sitting in .env said "apify ✓" long
+        # after the browser source replaced it -- the same class of lie the
+        # search_backend field above exists to stop telling.
+        "comp_source": settings.comp_source,
         "apify_configured": bool(settings.apify_token),
         "vision_configured": settings.vision_configured,
         "default_store_url": settings.default_store_url,

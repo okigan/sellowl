@@ -101,6 +101,7 @@ export interface Health {
   ok: boolean;
   elastic_configured: boolean;
   search_backend: string;
+  comp_source: string;
   embedding_model: string;
   apify_configured: boolean;
   vision_configured: boolean;

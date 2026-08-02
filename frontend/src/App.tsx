@@ -136,7 +136,10 @@ export default function App() {
 
       {health && (
         <p className="pb-5 text-[11px] text-muted/60">
-          {health.apify_configured ? "apify ✓" : "apify ✗ (set APIFY_TOKEN)"} ·{" "}
+          <span title={`Listings come from: ${health.comp_source}`}>
+            source: {health.comp_source}
+          </span>{" "}
+          ·{" "}
           <span
             title={
               health.embedding_model
