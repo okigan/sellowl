@@ -554,6 +554,29 @@ always the eBay band) are all instances of the same underlying principle:
 this app's entire premise (per § Guarding against semantic drift's "always
 show the comps") is that provenance is not optional decoration.
 
+### 4. A single bad vision guess could swing a recommendation by hundreds of dollars
+
+A real case: an 8ft RCA cable's printed length got read by the vision model
+as an xlarge shipping box (`size_class` had no grounding in the prompt — see
+§ Vision). `shipping_estimate` dutifully returned its flat $140 xlarge rate,
+`net_proceeds_ebay` dutifully subtracted it from a $7 item, and the
+recommendation math dutifully produced a fabricated +$138 "opportunity."
+Every formula involved was correct; nothing checked whether the *output*
+was plausible for the item it was attached to.
+
+**Change, two layers:** First, the prompt now defines `size_class` by
+shipping-box size explicitly and calls out the cable-length trap by name
+(§ Vision). Second, `pricing.sane_shipping` clamps the shipping estimate to
+`MAX_SHIPPING_TO_PRICE_RATIO` (3x) the highest price actually observed for
+the item (ask price, sold band, local band) — a second line of defense so
+the *next* vision regression, in this attribute or another, can't repeat
+the same class of failure. Golden-case tests catch scenarios someone
+thought to write down; they didn't catch this one. `tests/test_invariants.py`
+adds property-based (Hypothesis) tests that fuzz `build_verdict`'s input
+space instead, asserting invariants like "opportunity_usd can't dwarf every
+price the verdict was given" — the general shape of "common sense" check
+this bug exposed was missing.
+
 ## Tier 3 — dry run only
 
 Given an eBay seller API key, render the exact revise-price call that *would*

@@ -47,6 +47,30 @@ def shipping_estimate(attributes: dict[str, str]) -> float:
     return SHIPPING_BY_SIZE.get(size, DEFAULT_SHIPPING)
 
 
+# A shipping estimate several times larger than every price signal we have
+# for the item is not a fact about shipping — it's a sign that size_class
+# was misread (a coiled cable's "8 ft" printed length mistaken for an xlarge
+# box; see docs/DESIGN.md). No rational seller lists a $7 item and eats $140
+# in shipping. Capping it here is a second line of defense: even if a future
+# vision prompt regresses this same way, one bad size guess can no longer
+# swing a recommendation by hundreds of dollars.
+MAX_SHIPPING_TO_PRICE_RATIO = 3.0
+
+
+def sane_shipping(shipping: float, *reference_prices: float | None) -> float:
+    """Clamp a shipping estimate against the real prices in play.
+
+    `reference_prices` is every price we actually observed for this item
+    (ask price, sold/local band highs) — whichever of those is largest sets
+    the ceiling. If none are available, the raw estimate passes through
+    unchanged; there's nothing to ground it against.
+    """
+    refs = [p for p in reference_prices if p is not None and p > 0]
+    if not refs:
+        return shipping
+    return min(shipping, max(refs) * MAX_SHIPPING_TO_PRICE_RATIO)
+
+
 def percentiles(values: list[float]) -> PriceBand | None:
     """Nearest-rank percentiles over a price list.
 
@@ -148,7 +172,12 @@ def build_verdict(
             local_band=local_band,
         )
 
-    shipping = shipping_estimate(attributes)
+    shipping = sane_shipping(
+        shipping_estimate(attributes),
+        ask_price,
+        sold_band.p90,
+        local_band.p90 if local_band else None,
+    )
     ebay_net = net_proceeds_ebay(sold_band.p50, shipping, fees)
     local_trusted = local_band_is_trustworthy(local_band, sold_band)
     local_net = net_proceeds_local(local_band.p50, fees) if local_band and local_trusted else None

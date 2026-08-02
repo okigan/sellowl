@@ -16,6 +16,7 @@ from sellowl.pricing import (
     net_proceeds_ebay,
     net_proceeds_local,
     percentiles,
+    sane_shipping,
     shipping_estimate,
 )
 
@@ -133,6 +134,39 @@ class TestShippingEstimate:
         assert shipping_estimate({"size_class": "small"}) < shipping_estimate(
             {"size_class": "xlarge"}
         )
+
+
+class TestSaneShipping:
+    def test_passes_through_when_within_ratio(self) -> None:
+        assert sane_shipping(18.0, 100.0) == 18.0
+
+    def test_clamps_to_multiple_of_the_highest_reference_price(self) -> None:
+        assert sane_shipping(65.0, 10.0) == 30.0
+
+    def test_no_references_leaves_it_unchanged(self) -> None:
+        assert sane_shipping(140.0) == 140.0
+        assert sane_shipping(140.0, None, None) == 140.0
+
+    def test_ignores_non_positive_references(self) -> None:
+        assert sane_shipping(140.0, None, 0.0, -5.0) == 140.0
+
+    def test_picks_the_largest_of_several_references(self) -> None:
+        # ceiling = 50 * 3 = 150, above the raw 140 estimate, so it passes through
+        assert sane_shipping(140.0, 7.0, 50.0, 20.0) == 140.0
+        # a lower reference set brings the ceiling below the raw estimate
+        assert sane_shipping(140.0, 7.0, 20.0, 10.0) == 60.0
+
+    def test_regression_xlarge_shipping_on_a_seven_dollar_cable(self) -> None:
+        """The bug this guards: an 8ft RCA cable's printed length got read
+        as an xlarge shipping box, so a $7 item's net proceeds included a
+        flat $140 shipping charge -- turning a small/no-op verdict into a
+        fabricated +$138 "opportunity". None of the individual formulas
+        were wrong; nothing checked whether the shipping guess was
+        plausible for the item it was attached to."""
+        shipping = shipping_estimate({"size_class": "xlarge"})
+        assert shipping == 140.0
+        clamped = sane_shipping(shipping, 7.0, 23.0)
+        assert clamped == pytest.approx(69.0)  # 3x the $23 high, not the raw $140
 
 
 class TestLocalBandIsTrustworthy:
