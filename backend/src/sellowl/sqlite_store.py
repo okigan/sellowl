@@ -141,16 +141,33 @@ class SqliteCompStore:
     ) -> list[Comp]:
         conn = self._connect()
         keyword_ranking = self._bm25_ranking(conn, bm25_query, venue)
-        semantic_ranking, sources = self._semantic_ranking(conn, query_vector, venue)
+        semantic_ranking, sources, similarity = self._semantic_ranking(conn, query_vector, venue)
 
+        # A relevance floor, not just a ranking. RRF returns the best N of
+        # whatever exists, however bad -- so when the right comps simply
+        # aren't in the corpus (a failed scrape, a novel item), it hands back
+        # the least-wrong junk and the pricing stage prices it as fact. A USB
+        # security key was matched against breadboard kits and a water pump
+        # this way. Nothing here may be priced unless it is plausibly the
+        # same kind of thing; returning too few comps is honest, because the
+        # MIN_COMPS guard turns that into "insufficient data".
+        floor = self._embedder.relevance_floor
         fused = rrf_fuse([keyword_ranking, semantic_ranking])
-        ordered = sorted(fused.items(), key=lambda kv: kv[1], reverse=True)[:size]
+        ordered = sorted(fused.items(), key=lambda kv: kv[1], reverse=True)
 
         out: list[Comp] = []
+        rejected = 0
         for doc_id, score in ordered:
+            if similarity.get(doc_id, 0.0) < floor:
+                rejected += 1
+                continue
             source = sources.get(doc_id) or self._source_for(conn, doc_id)
             if source is not None:
                 out.append(doc_to_comp(source, score))
+            if len(out) >= size:
+                break
+        if rejected:
+            log.info("comps_below_relevance_floor", rejected=rejected, kept=len(out), floor=floor)
         return out
 
     def _bm25_ranking(self, conn: sqlite3.Connection, query: str, venue: Venue) -> list[str]:
@@ -170,17 +187,20 @@ class SqliteCompStore:
 
     def _semantic_ranking(
         self, conn: sqlite3.Connection, query_vector: list[float], venue: Venue
-    ) -> tuple[list[str], dict[str, dict[str, Any]]]:
+    ) -> tuple[list[str], dict[str, dict[str, Any]], dict[str, float]]:
         rows = conn.execute(
             "SELECT doc_id, source, vector FROM comps WHERE venue = ?", (venue.value,)
         ).fetchall()
         scored: list[tuple[str, float]] = []
         sources: dict[str, dict[str, Any]] = {}
+        similarity: dict[str, float] = {}
         for row in rows:
             sources[row["doc_id"]] = json.loads(row["source"])
-            scored.append((row["doc_id"], cosine(query_vector, json.loads(row["vector"]))))
+            sim = cosine(query_vector, json.loads(row["vector"]))
+            similarity[row["doc_id"]] = sim
+            scored.append((row["doc_id"], sim))
         scored.sort(key=lambda kv: kv[1], reverse=True)
-        return [doc_id for doc_id, _ in scored[:RANK_WINDOW]], sources
+        return [doc_id for doc_id, _ in scored[:RANK_WINDOW]], sources, similarity
 
     def _source_for(self, conn: sqlite3.Connection, doc_id: str) -> dict[str, Any] | None:
         row = conn.execute("SELECT source FROM comps WHERE doc_id = ?", (doc_id,)).fetchone()

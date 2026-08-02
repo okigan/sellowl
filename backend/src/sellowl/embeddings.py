@@ -36,6 +36,7 @@ from .logging import get_logger
 log = get_logger(__name__)
 
 EMBED_DIM = 256
+EMBED_BATCH = 64
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
 
@@ -54,6 +55,17 @@ class Embedder(Protocol):
 
     @property
     def dim(self) -> int: ...
+
+    @property
+    def relevance_floor(self) -> float:
+        """Cosine below which a comp is not the same kind of thing at all.
+
+        Lives on the embedder because the scale is model-specific: bge's
+        unrelated pairs sit around 0.55 and related ones above 0.65, while
+        hashed n-grams occupy a completely different range. A single global
+        constant would be right for at most one embedder.
+        """
+        ...
 
 
 def _normalize(vector: list[float]) -> list[float]:
@@ -83,6 +95,12 @@ class HashingEmbedder:
     @property
     def dim(self) -> int:
         return self._dim
+
+    @property
+    def relevance_floor(self) -> float:
+        # Lexical overlap, so unrelated text scores near zero and the floor
+        # can be low without letting nonsense through.
+        return 0.10
 
     def _features(self, text: str) -> list[str]:
         words = _WORD_RE.findall(text.lower())
@@ -123,11 +141,13 @@ class OpenAIEmbedder:
         model: str,
         dim: int = EMBED_DIM,
         query_prefix: str = QUERY_PREFIX,
+        floor: float = 0.62,
     ) -> None:
         self._client = client
         self._model = model
         self._dim = dim
         self._query_prefix = query_prefix
+        self._floor = floor
         self._fallback = HashingEmbedder(dim)
         self._warned = False
 
@@ -135,9 +155,20 @@ class OpenAIEmbedder:
     def dim(self) -> int:
         return self._dim
 
+    @property
+    def relevance_floor(self) -> float:
+        return self._floor
+
     async def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
+        # Chunked: a backfill embeds thousands of comps at once, and one
+        # request that large is rejected or times out on most servers.
+        if len(texts) > EMBED_BATCH:
+            out: list[list[float]] = []
+            for i in range(0, len(texts), EMBED_BATCH):
+                out += await self.embed(texts[i : i + EMBED_BATCH])
+            return out
         try:
             response = await self._client.embeddings.create(model=self._model, input=texts)
         except Exception as exc:  # noqa: BLE001 - retrieval must degrade, not die
