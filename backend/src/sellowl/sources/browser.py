@@ -23,10 +23,13 @@ Known limits, both structural rather than bugs to fix later:
   but not the completed sales to price them against. The context is
   persistent (`scrape_profile_dir`) precisely so a human can log in once, by
   hand, and have it stick -- this code never handles credentials.
-- **Facebook Marketplace is not implemented here.** It is login-walled and
-  heavily JS-driven; pretending otherwise would mean silently returning no
-  local comps. It returns empty and says so, which the pipeline already
-  tolerates (the venue recommendation degrades, the job does not fail).
+- **Facebook Marketplace does NOT need a login.** An earlier version of this
+  file claimed it did; that was wrong, and worth correcting loudly because it
+  would have justified never trying. Marketplace search renders for logged-out
+  visitors -- it just renders client-side, so the cards are absent from the
+  initial HTML and there are no stable class names to select on. Fields are
+  therefore classified by shape (a price looks like "$50", a place like
+  "Austin, TX", the title is what remains).
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
 from ..config import Settings
 from ..logging import get_logger
+from .local import search_url
 from .sold import sold_search_url
 from .store import seller_from_url, seller_search_url
 
@@ -89,6 +93,55 @@ _EBAY_IMG_RE = re.compile(r"(https://i\.ebayimg\.com/\S+?)\.webp\b", re.IGNORECA
 
 def as_jpeg(url: str) -> str:
     return _EBAY_IMG_RE.sub(r"\1.jpg", url or "")
+
+
+# Facebook renders each result as one anchor to /marketplace/item/<id>, with
+# the fields as unlabelled text lines -- there are no stable class names to
+# select on, so the lines are classified by shape instead. Observed order is
+# [optional "Partner listing"], price, [strikethrough original price], title,
+# "City, ST".
+_FB_EXTRACT = """() => {
+  const out = [];
+  for (const a of document.querySelectorAll('a[href*="/marketplace/item/"]')) {
+    const m = a.href.match(/\\/marketplace\\/item\\/(\\d+)/);
+    if (!m) continue;
+    const lines = (a.innerText || '').split('\\n').map(s => s.trim()).filter(Boolean);
+    const img = a.querySelector('img');
+    out.push({ id: m[1], lines, url: a.href.split('?')[0],
+               image: img ? (img.src || '') : '' });
+  }
+  return out;
+}"""
+
+_FB_PRICE_RE = re.compile(r"^\$[\d,]+(?:\.\d{2})?$")
+_FB_PLACE_RE = re.compile(r"^[^,]+,\s*[A-Z]{2}$")
+
+
+def parse_fb_card(card: dict[str, Any]) -> dict[str, Any] | None:
+    """One anchor's text lines -> a row shaped like the old actor's output.
+
+    Returning the actor's shape means `parse_local_comps` is untouched.
+    """
+    lines = [ln for ln in card.get("lines", []) if ln.lower() != "partner listing"]
+    prices = [ln for ln in lines if _FB_PRICE_RE.match(ln)]
+    places = [ln for ln in lines if _FB_PLACE_RE.match(ln)]
+    # The title is whatever is left; take the longest to avoid stray badges
+    # like "Free" or a shipping note.
+    rest = [ln for ln in lines if ln not in prices and ln not in places]
+    title = max(rest, key=len) if rest else ""
+    if not title or not prices:
+        return None
+    # Two prices means a markdown: the first is what it is selling for now.
+    amount = prices[0].replace("$", "").replace(",", "")
+    city, _, state = places[0].partition(", ") if places else ("", "", "")
+    return {
+        "id": card.get("id", ""),
+        "marketplace_listing_title": title,
+        "listing_price": {"amount": amount},
+        "listingUrl": card.get("url", ""),
+        "primary_listing_photo": {"photo_image_url": card.get("image", "")},
+        "location": {"reverse_geocode": {"city": city, "state": state}},
+    }
 
 
 def _usable(row: dict[str, Any]) -> bool:
@@ -199,6 +252,40 @@ class BrowserScraper:
             finally:
                 await page.close()
 
+    async def fetch_fb_cards(self, url: str) -> list[dict[str, Any]]:
+        """A Marketplace search page -> rows in the old actor's shape."""
+        async with self._lock:
+            ctx = await self._context()
+            page = await ctx.new_page()
+            try:
+                await self._pace()
+                response = await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                # Marketplace renders client-side; the cards are not in the
+                # initial HTML.
+                await page.wait_for_timeout(self._s.scrape_settle_ms + 3000)
+                if response is not None and response.status >= 400:
+                    log.warning("fb_scrape_blocked", url=url[:90], status=response.status)
+                    return []
+                cards = await page.evaluate(_FB_EXTRACT)
+                rows = [r for r in (parse_fb_card(c) for c in cards) if r is not None]
+                if not rows:
+                    # Marketplace is readable logged-out today, and stayed
+                    # readable across repeated searches in one session when
+                    # measured. But "logged-out access degrades after a while"
+                    # is exactly the kind of thing that would otherwise show up
+                    # as a quietly empty local band and a silently worse
+                    # recommendation, so say which of the two happened.
+                    wall = await page.locator('input[name="pass"], form[action*="login"]').count()
+                    log.warning(
+                        "fb_no_results",
+                        url=url[:90],
+                        looks_like_login_wall=bool(wall),
+                    )
+                log.info("scraped_fb", url=url[:90], rows=len(rows))
+                return rows
+            finally:
+                await page.close()
+
     async def close(self) -> None:
         if self._ctx is not None:
             await self._ctx.close()
@@ -238,8 +325,7 @@ class EbayBrowserSource:
         return rows[:limit]
 
     async def local_comps(self, metro: str, query: str, limit: int) -> list[dict[str, Any]]:
-        log.info("local_comps_unsupported_by_browser_source", metro=metro)
-        return []
+        return (await self._scraper.fetch_fb_cards(search_url(metro, query)))[:limit]
 
     async def close(self) -> None:
         if self._owns_scraper:
