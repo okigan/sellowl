@@ -13,56 +13,50 @@
 | Mutation tests | mutmut — scoped, see below |
 | Frontend | React 19 + TypeScript + Vite |
 | Styling | Tailwind |
-| E2E | Playwright — added after tier 1 works, not before |
+| E2E | Playwright — intended, never built (see below) |
 | Search | Elastic Serverless (cloud), local ES via optional compose profile |
 
-## Layout
+## Where code goes
 
-```
-sellowl/
-  docs/            GOAL.md DESIGN.md TODO.md DEVELOP.md MIGRATION.md
-  backend/
-    pyproject.toml
-    src/sellowl/
-      main.py          FastAPI app, routes
-      config.py        pydantic-settings, all env
-      jobs.py          background job orchestration + in-process job state
-      sources/         apify.py (client) + store.py sold.py local.py parse.py
-      vision.py        photo -> structured JSON (Anthropic or OpenAI-compatible)
-      index.py         ES mappings, bulk upsert, hit -> Comp
-      match.py         RRF retrieval + drift guards + numeric-spec scaling
-      pricing.py       ← pure functions. percentiles -> verdict. mutation-tested.
-      sightings.py     durable first-seen ledger -> days a listing has sat
-      cache.py         TTL disk cache (apify + vision namespaces)
-      logging.py       structlog setup
-      models.py        pydantic models shared across the pipeline
-    tests/
-  frontend/
-    src/
-      App.tsx
-      components/
-      api.ts
-  compose.yaml
-  Makefile
-```
+`backend/src/sellowl/` is flat, one module per pipeline responsibility, with
+`sources/` the only subpackage (one module per upstream, plus the shared
+client). `frontend/src/` is `App.tsx` plus `components/` and a single `api.ts`
+holding every fetch and every response type. Read the directory — it's small,
+and it's the only description that can't go stale.
 
-Two things that were planned differently and are worth knowing:
+The rules that actually constrain where something belongs:
 
-- **Job and item state is an in-process dict** (`jobs.JobRegistry`), not an
-  Elasticsearch index. Only `sellowl-comps` exists in the cluster. A restart
-  mid-job orphans it; that's the accepted trade (see DESIGN.md § Jobs).
-- **`sightings.py` is not part of `cache.py`** despite the similar shape. The
-  cache is disposable and TTL'd (`DELETE /api/cache` wipes it); the sightings
-  ledger is the only record that a listing existed before today, and losing
-  it silently resets every item's age to zero.
+**Money math stays pure.** The pricing module takes aggregation numbers and
+config in and returns a verdict — no I/O, no LLM, no Elasticsearch. That is
+what makes it mutation-testable, and it's where a silent wrong answer would
+hurt most. Anything needing a network call belongs on the other side of that
+boundary, with the numbers passed in.
 
-Playwright/e2e is in the stack table as an intention. **It was never built** —
-there is no `frontend/e2e/`. Coverage is backend pytest (including
-Hypothesis property tests in `test_invariants.py`) plus `tsc --noEmit`.
+**Parse third-party JSON at the edge.** Scraper output is `dict[str, Any]`
+until a source module turns it into a pydantic model; nothing downstream
+should ever see a raw actor row. When an actor's real shape contradicts its
+README — which has happened for every actor tried — the fixture and the
+parser are the record of what's true.
 
-`pricing.py` is deliberately pure and dependency-free: aggregation numbers and
-config in, verdict out. No I/O, no LLM, no Elasticsearch. That's what makes it
-testable, and it's where all the money math lives.
+**Retrieval and pricing are separate layers.** Retrieval decides *which*
+listings are comparable; pricing decides what they imply. Guards that answer
+"is this the same product?" belong with matching. Guards that answer "is this
+number plausible?" belong with pricing.
+
+**Match the storage guarantee to the data's lifetime.** The disk cache is
+disposable by design — TTL'd, and `DELETE /api/cache` wipes it. Anything
+whose loss would silently change an answer rather than just slow things down
+needs its own durable store, even when the mechanics look identical. (Listing
+age is the live example: it's the only record a listing existed before today,
+so it deliberately does not live in the cache.)
+
+**Job state is in-process and that's a choice, not an oversight.** One
+process, one event loop, no Redis. A restart mid-job orphans it. See
+DESIGN.md § Jobs before adding a second source of truth.
+
+Playwright/e2e appears in the stack table as an intention. **It was never
+built.** Coverage is backend pytest — including Hypothesis property tests —
+plus `tsc --noEmit` on the frontend.
 
 ## Compose
 
@@ -99,7 +93,7 @@ inference endpoint configured, so local is not a drop-in substitute.
 make dev          # compose up, backend + frontend, hot reload
 make check        # ruff format --check && ruff check && mypy && pytest
 make fix          # ruff format && ruff check --fix
-make mutate       # mutmut run, scoped to pricing.py + match.py
+make mutate       # mutmut run, scoped — see [tool.mutmut] in pyproject.toml
 make e2e          # placeholder — no Playwright suite exists yet, this fails
 ```
 
@@ -117,31 +111,30 @@ unverified shape gets parsed into pydantic models at the boundary and is
 
 **Mutation testing is scoped, on purpose.** Running mutmut over the whole app
 is theatre — most of it is I/O glue against third-party scrapers, where a
-surviving mutant tells you nothing. Point it at the two modules where a silent
-wrong answer is the actual product failure:
+surviving mutant tells you nothing. Point it only at code where a wrong answer
+would be *silent and plausible*: money math, percentile selection, venue
+choice, score thresholds, the minimum-comps guard. A flipped comparison in
+any of those quietly recommends the wrong price while every test still
+passes. The exact scope lives in `[tool.mutmut]` in `pyproject.toml`; extend
+it when a new module starts deciding a number the user acts on, and target no
+survivors there.
 
-- `pricing.py` — fee math, percentile selection, venue choice, the
-  `MIN_COMPS` guard. A flipped comparison here quietly recommends the wrong
-  price, and every test would still pass.
-- `match.py` — score thresholds and attribute-agreement logic. An off-by-one
-  on the threshold silently widens or empties the comp set.
+**Never hit live actors from tests** — they cost money and they're flaky.
+Record one real response per upstream into a fixture and replay it. Those
+fixtures double as documentation of the actual output shapes, which the actor
+READMEs get wrong. Test HTTP-level behaviour (retries, cache fallbacks)
+against a mocked transport rather than a live host.
 
-Target: no surviving mutants in `pricing.py`. `match.py` best-effort.
-
-**Testing approach.** Record one real response from each Apify actor into
-`tests/fixtures/` and replay it. Never hit live actors from tests — they cost
-money and they're flaky. The fixtures double as documentation of the actual
-output shapes, which the actor READMEs get wrong. HTTP-level Apify behaviour
-(retries, the stale-cache fallback) is mocked with `respx`.
-
-**Property tests for the "is this answer sane at all" class of bug.**
-`tests/test_invariants.py` fuzzes `build_verdict` with Hypothesis over its
-whole input space, asserting things no correct recommendation may ever do:
-an opportunity larger than every price in play, a shipping estimate several
-times the item's own value, a stale-trimmed target below the observed band.
-Golden-case tests only catch scenarios someone thought to write down — a
-$7 cable with a hallucinated $140 shipping estimate wasn't one of them, and
-it shipped a fabricated "+$138 opportunity" to the UI as a result.
+**Write property tests for the "is this answer sane at all" class of bug.**
+Golden cases only catch scenarios someone thought to write down. Fuzz the
+verdict builder over its whole input space instead and assert what no correct
+recommendation may *ever* do: claim an opportunity larger than every price in
+play, estimate shipping at several times the item's own value, or recommend a
+price outside the range real sales support. This is not redundant with the
+golden cases — a $7 cable with a hallucinated $140 shipping estimate passed
+every unit test in the suite and shipped a fabricated "+$138 opportunity" to
+the UI, because each formula was individually correct and nothing checked
+whether the *output* was plausible.
 
 ## Design language
 
