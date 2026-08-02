@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from .cache import cache_clear
 from .config import get_settings
-from .jobs import JobRegistry, Pipeline, revise_payload
+from .jobs import JobRegistry, Pipeline, close_shared_scraper, revise_payload
 from .logging import configure_logging
 from .models import Item, Job, JobStatus
 
@@ -28,6 +28,11 @@ app.add_middleware(
 )
 
 registry = JobRegistry()
+
+
+@app.on_event("shutdown")
+async def _shutdown() -> None:
+    await close_shared_scraper()
 
 
 class AnalyzeRequest(BaseModel):

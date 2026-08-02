@@ -216,6 +216,11 @@ class EbayBrowserSource:
 
     def __init__(self, settings: Settings, scraper: BrowserScraper | None = None) -> None:
         self._s = settings
+        # `owns_scraper` decides whether close() tears the browser down. A
+        # shared, long-lived scraper must outlive any one job: the profile is
+        # single-writer, so a per-job browser meant back-to-back jobs raced
+        # for the lock and the second one failed to launch.
+        self._owns_scraper = scraper is None
         self._scraper = scraper or BrowserScraper(settings)
 
     async def store_listings(self, store_url: str, limit: int) -> list[dict[str, Any]]:
@@ -237,4 +242,5 @@ class EbayBrowserSource:
         return []
 
     async def close(self) -> None:
-        await self._scraper.close()
+        if self._owns_scraper:
+            await self._scraper.close()

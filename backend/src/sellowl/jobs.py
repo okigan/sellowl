@@ -27,6 +27,7 @@ from .pricing import FeeConfig, build_verdict
 from .sightings import record_sightings
 from .sources import (
     ApifyCompSource,
+    BrowserScraper,
     CompSource,
     EbayBrowserSource,
     fetch_bytes,
@@ -56,11 +57,29 @@ def make_store(settings: Settings) -> CompStore:
     return MemoryCompStore()
 
 
+# One browser for the process, not one per job. The scraping profile is
+# single-writer, so a per-job browser made two jobs in a row fight over the
+# lock; keeping it warm also avoids re-running the homepage warm-up (and the
+# extra launches that come with it) on every analysis.
+_shared_scraper: BrowserScraper | None = None
+
+
 def make_source(settings: Settings) -> CompSource:
     """See sources/protocol.py for why the three legs differ in replaceability."""
     if settings.comp_source == "browser":
-        return EbayBrowserSource(settings)
+        global _shared_scraper
+        if _shared_scraper is None:
+            _shared_scraper = BrowserScraper(settings)
+        return EbayBrowserSource(settings, scraper=_shared_scraper)
     return ApifyCompSource(settings)
+
+
+async def close_shared_scraper() -> None:
+    """Called on app shutdown; the browser deliberately outlives a job."""
+    global _shared_scraper
+    if _shared_scraper is not None:
+        await _shared_scraper.close()
+        _shared_scraper = None
 
 
 def make_embedder(settings: Settings) -> Embedder:
