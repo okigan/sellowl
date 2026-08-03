@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     scrape_settle_ms: int = 2500
     scrape_headless: bool = False
     scrape_stealth: bool = True
+    # Follow "next" up to this many result pages per query. One page is 60
+    # results; deeper queries were silently truncated at the first.
+    scrape_max_pages: int = 3
     # Persistent browser profile. Its real purpose: eBay puts sold/completed
     # listings behind a login, so a human can sign in once by hand and have
     # the session stick. The app never handles credentials.

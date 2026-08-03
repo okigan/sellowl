@@ -35,6 +35,8 @@ Known limits, both structural rather than bugs to fix later:
 from __future__ import annotations
 
 import asyncio
+import collections
+import random
 import re
 import time
 from typing import Any
@@ -144,6 +146,18 @@ def parse_fb_card(card: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+# Verified against a live result page. The obvious-looking
+# `.sg-pagination__page` selector matches nothing on current eBay; these do,
+# and the href already carries the `_pgn=N` cursor.
+_NEXT_PAGE = """() => {
+  const a = document.querySelector(
+    'a.pagination__next, a[type="next"], a[aria-label*="Next" i]'
+  );
+  if (!a || a.getAttribute('aria-disabled') === 'true') return null;
+  return a.href || null;
+}"""
+
+
 def _usable(row: dict[str, Any]) -> bool:
     title = (row.get("title") or "").strip().lower()
     return bool(row.get("itemId")) and bool(title) and title not in _PLACEHOLDER_TITLES
@@ -160,6 +174,11 @@ class BrowserScraper:
         self._lock = asyncio.Lock()
         self._last_fetch = 0.0
         self._warm = False
+        # "Nothing came back" has three very different causes and the pipeline
+        # could not tell them apart: no results exist, we were blocked, or we
+        # were asked to sign in. Silent zeros in a pricing app are how a
+        # scraping outage gets mistaken for an item nobody wants.
+        self.health: dict[str, int] = collections.Counter()
 
     async def _context(self) -> BrowserContext:
         if self._ctx is not None:
@@ -213,7 +232,14 @@ class BrowserScraper:
         return self._ctx
 
     async def _pace(self) -> None:
-        wait = self._s.scrape_min_interval_s - (time.monotonic() - self._last_fetch)
+        """Wait out the interval, with jitter.
+
+        Exactly-8.000s between requests is a signature nothing human produces.
+        The jitter is cheap and only ever *adds* on average, so it costs a
+        little politeness rather than buying speed.
+        """
+        interval = self._s.scrape_min_interval_s * random.uniform(0.85, 1.4)
+        wait = interval - (time.monotonic() - self._last_fetch)
         if wait > 0:
             await asyncio.sleep(wait)
         self._last_fetch = time.monotonic()
@@ -227,26 +253,53 @@ class BrowserScraper:
         await page.wait_for_timeout(2500)
         self._warm = True
 
-    async def fetch_cards(self, url: str) -> list[dict[str, Any]]:
-        """One result page -> raw rows, in the shape the parsers already expect."""
+    async def fetch_cards(self, url: str, want: int = 0) -> list[dict[str, Any]]:
+        """Result pages -> raw rows, in the shape the parsers already expect.
+
+        Follows eBay's "next" link until `want` rows are collected or
+        `scrape_max_pages` is reached. One page is 60 results; a query with
+        genuine depth was previously truncated at the first page.
+        """
         async with self._lock:  # one page at a time, on purpose
             ctx = await self._context()
             page = await ctx.new_page()
+            rows: list[dict[str, Any]] = []
+            seen: set[str] = set()
             try:
                 await self._warm_up(page)
-                await self._pace()
-                response = await page.goto(url, wait_until="domcontentloaded", timeout=45000)
-                await page.wait_for_timeout(self._s.scrape_settle_ms)
-                title = await page.title()
-                if "sign in" in title.lower():
-                    log.warning("scrape_requires_login", url=url[:90], page_title=title)
-                    return []
-                if response is not None and response.status >= 400:
-                    log.warning("scrape_blocked", url=url[:90], status=response.status)
-                    return []
-                rows = [r for r in await page.evaluate(_EXTRACT) if _usable(r)]
-                for r in rows:
-                    r["image"] = as_jpeg(r["image"])
+                next_url: str | None = url
+                for _ in range(max(1, self._s.scrape_max_pages)):
+                    if next_url is None:
+                        break
+                    await self._pace()
+                    response = await page.goto(
+                        next_url, wait_until="domcontentloaded", timeout=45000
+                    )
+                    await page.wait_for_timeout(self._s.scrape_settle_ms)
+                    title = await page.title()
+                    if "sign in" in title.lower():
+                        self.health["login_required"] += 1
+                        log.warning("scrape_requires_login", url=next_url[:90], page_title=title)
+                        break
+                    if response is not None and response.status >= 400:
+                        self.health["blocked"] += 1
+                        log.warning("scrape_blocked", url=next_url[:90], status=response.status)
+                        break
+                    page_rows = [r for r in await page.evaluate(_EXTRACT) if _usable(r)]
+                    for r in page_rows:
+                        r["image"] = as_jpeg(r["image"])
+                    # eBay reshuffles between pages, so the same listing can
+                    # appear on two of them. Left in, it would be counted
+                    # twice in a price band -- inflating n and dragging the
+                    # percentiles toward whatever happened to straddle the
+                    # page boundary.
+                    fresh = [r for r in page_rows if r["itemId"] not in seen]
+                    seen.update(r["itemId"] for r in fresh)
+                    rows += fresh
+                    self.health["ok"] += 1
+                    if not page_rows or (want and len(rows) >= want):
+                        break
+                    next_url = await page.evaluate(_NEXT_PAGE)
                 log.info("scraped", url=url[:90], rows=len(rows))
                 return rows
             finally:
@@ -267,7 +320,14 @@ class BrowserScraper:
                     log.warning("fb_scrape_blocked", url=url[:90], status=response.status)
                     return []
                 cards = await page.evaluate(_FB_EXTRACT)
-                rows = [r for r in (parse_fb_card(c) for c in cards) if r is not None]
+                parsed = [r for r in (parse_fb_card(c) for c in cards) if r is not None]
+                seen_ids: set[str] = set()
+                rows = []
+                for r in parsed:
+                    if r["id"] in seen_ids:
+                        continue
+                    seen_ids.add(r["id"])
+                    rows.append(r)
                 if not rows:
                     # Marketplace is readable logged-out today, and stayed
                     # readable across repeated searches in one session when
@@ -313,10 +373,10 @@ class EbayBrowserSource:
     async def store_listings(self, store_url: str, limit: int) -> list[dict[str, Any]]:
         seller = seller_from_url(store_url)
         url = seller_search_url(seller) if seller else store_url
-        return (await self._scraper.fetch_cards(url))[:limit]
+        return (await self._scraper.fetch_cards(url, want=limit))[:limit]
 
     async def sold_comps(self, query: str, limit: int, days_back: int) -> list[dict[str, Any]]:
-        rows = await self._scraper.fetch_cards(sold_search_url(query))
+        rows = await self._scraper.fetch_cards(sold_search_url(query), want=limit)
         if not rows:
             # Almost always the sign-in wall rather than a genuinely empty
             # result. Saying so beats a silent zero, because the pricing stage

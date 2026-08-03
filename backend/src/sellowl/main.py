@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from .cache import cache_clear
 from .config import get_settings
-from .jobs import JobRegistry, Pipeline, close_shared_scraper, revise_payload
+from .jobs import JobRegistry, Pipeline, close_shared_scraper, revise_payload, scraper_health
 from .logging import configure_logging
 from .models import Item, Job, JobStatus
 
@@ -89,6 +89,10 @@ async def health() -> dict[str, object]:
         # after the browser source replaced it -- the same class of lie the
         # search_backend field above exists to stop telling.
         "comp_source": settings.comp_source,
+        # Counts of ok / blocked / login_required page fetches. A pricing app
+        # that silently returns nothing when it is being blocked is
+        # indistinguishable from one reporting that nothing sold.
+        "scraper_health": scraper_health(),
         "apify_configured": bool(settings.apify_token),
         "vision_configured": settings.vision_configured,
         "default_store_url": settings.default_store_url,

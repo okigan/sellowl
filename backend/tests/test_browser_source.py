@@ -92,3 +92,21 @@ class TestParseFbCard:
 
     def test_no_title_is_dropped(self) -> None:
         assert parse_fb_card({"id": "1", "lines": ["$20", "Austin, TX"]}) is None
+
+
+class TestNextPageSelector:
+    """The obvious-looking selector from the write-up
+    (`.sg-pagination__page`) matches nothing on current eBay -- verified
+    against a live result page, which is why this is pinned."""
+
+    def test_targets_the_selectors_that_actually_exist(self) -> None:
+        from sellowl.sources.browser import _NEXT_PAGE
+
+        assert "pagination__next" in _NEXT_PAGE
+        assert 'a[type="next"]' in _NEXT_PAGE
+        assert "sg-pagination__page" not in _NEXT_PAGE
+
+    def test_respects_a_disabled_next_link(self) -> None:
+        from sellowl.sources.browser import _NEXT_PAGE
+
+        assert "aria-disabled" in _NEXT_PAGE, "the last page must stop the loop"

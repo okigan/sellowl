@@ -74,6 +74,11 @@ def make_source(settings: Settings) -> CompSource:
     return ApifyCompSource(settings)
 
 
+def scraper_health() -> dict[str, int]:
+    """Why fetches failed, if they did. See /health."""
+    return dict(_shared_scraper.health) if _shared_scraper is not None else {}
+
+
 async def close_shared_scraper() -> None:
     """Called on app shutdown; the browser deliberately outlives a job."""
     global _shared_scraper
