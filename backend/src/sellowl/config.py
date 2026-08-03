@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     vision_base_url: str = ""
     vision_api_key: str = ""
     vision_model: str = ""
+    # Comps get graded too (see the rerank stage), and there are ~15x more of
+    # them than there are of your own listings. They also need far less: a
+    # coarse condition and category off a thumbnail, not a careful appraisal.
+    # Measured on the same photo: 8B answered in 12.1s vs the 35B's 19.3s with
+    # comparable output, and a 44-call run is most of a job's wall time.
+    # Blank falls back to vision_model.
+    vision_rerank_model: str = ""
     # Comp photos repeat heavily across re-analyzes of the same store; cache
     # grades on disk like Apify runs. 0 disables. DELETE /api/cache clears it.
     #

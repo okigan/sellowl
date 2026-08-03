@@ -216,6 +216,7 @@ class VisionGrader:
 
         self._sem = asyncio.Semaphore(settings.vision_concurrency)
         self._cache_ttl_s = settings.vision_cache_ttl_hours * 3600
+        self._settings = settings
 
     @property
     def enabled(self) -> bool:
@@ -351,6 +352,18 @@ class VisionGrader:
             messages=[message],
         )
         return response.choices[0].message.content or ""
+
+    def for_reranking(self) -> VisionGrader:
+        """A grader tuned for comps rather than for the seller's own items.
+
+        Same prompt and contract; a smaller model where one is configured.
+        Comp photos outnumber item photos ~15:1 and only need a coarse read,
+        so this is where the wall-clock time of a job actually lives.
+        """
+        rerank_model = self._settings.vision_rerank_model
+        if not rerank_model or rerank_model == self._model:
+            return self
+        return VisionGrader(self._settings.model_copy(update={"vision_model": rerank_model}))
 
     async def grade_many(
         self,

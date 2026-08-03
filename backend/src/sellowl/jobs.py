@@ -151,7 +151,7 @@ class Pipeline:
             await self._stage_vision(job, grader, items)
             comps = await self._stage_comps(job, source, items, store)
             await self._stage_index(job, store, comps)
-            await self._stage_match(job, store, grader, items)
+            await self._stage_match(job, store, grader.for_reranking(), items)
 
             job.items = items
             job.stage = JobStage(name="done", detail=f"{len(items)} items", done=1, total=1)

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import contextlib
 import random
 import re
 import time
@@ -179,6 +180,11 @@ class BrowserScraper:
         # were asked to sign in. Silent zeros in a pricing app are how a
         # scraping outage gets mistaken for an item nobody wants.
         self.health: dict[str, int] = collections.Counter()
+        # eBay's sign-in wall on sold listings is a property of the session,
+        # not of the query. Learning that twelve times per job cost two
+        # minutes of paced page loads to re-confirm a fact already in hand --
+        # and twelve pointless requests at someone else's servers.
+        self.sold_login_walled = False
 
     async def _context(self) -> BrowserContext:
         if self._ctx is not None:
@@ -279,6 +285,13 @@ class BrowserScraper:
                     title = await page.title()
                     if "sign in" in title.lower():
                         self.health["login_required"] += 1
+                        if "LH_Sold" in next_url and not self.sold_login_walled:
+                            self.sold_login_walled = True
+                            log.warning(
+                                "sold_login_wall_detected",
+                                detail="skipping further sold scrapes this run; "
+                                "run scripts/browser_login.py once to enable them",
+                            )
                         log.warning("scrape_requires_login", url=next_url[:90], page_title=title)
                         break
                     if response is not None and response.status >= 400:
@@ -313,9 +326,15 @@ class BrowserScraper:
             try:
                 await self._pace()
                 response = await page.goto(url, wait_until="domcontentloaded", timeout=45000)
-                # Marketplace renders client-side; the cards are not in the
-                # initial HTML.
-                await page.wait_for_timeout(self._s.scrape_settle_ms + 3000)
+                # Marketplace renders client-side, so the cards are absent
+                # from the initial HTML. Wait for them to appear rather than
+                # sleeping a fixed guess: a fast page stops costing the
+                # worst case, and a slow one still gets its time.
+                with contextlib.suppress(Exception):  # absence handled below
+                    await page.wait_for_selector(
+                        'a[href*="/marketplace/item/"]',
+                        timeout=self._s.scrape_settle_ms + 4000,
+                    )
                 if response is not None and response.status >= 400:
                     log.warning("fb_scrape_blocked", url=url[:90], status=response.status)
                     return []
@@ -376,6 +395,10 @@ class EbayBrowserSource:
         return (await self._scraper.fetch_cards(url, want=limit))[:limit]
 
     async def sold_comps(self, query: str, limit: int, days_back: int) -> list[dict[str, Any]]:
+        if self._scraper.sold_login_walled:
+            # Already established this run. Re-checking would cost a paced
+            # page load per query to reach the same conclusion.
+            return []
         rows = await self._scraper.fetch_cards(sold_search_url(query), want=limit)
         if not rows:
             # Almost always the sign-in wall rather than a genuinely empty
