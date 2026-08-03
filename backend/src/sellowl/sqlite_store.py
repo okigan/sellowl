@@ -194,11 +194,27 @@ class SqliteCompStore:
         scored: list[tuple[str, float]] = []
         sources: dict[str, dict[str, Any]] = {}
         similarity: dict[str, float] = {}
+        stale_space = 0
         for row in rows:
             sources[row["doc_id"]] = json.loads(row["source"])
-            sim = cosine(query_vector, json.loads(row["vector"]))
+            vector = json.loads(row["vector"])
+            if len(vector) != len(query_vector):
+                # Indexed under a different embedder (e.g. while the endpoint
+                # was down and the lexical fallback was in use). Not
+                # comparable; counting it as "dissimilar" would silently bury
+                # a good comp, so it is reported and re-embedded on the next
+                # upsert rather than scored.
+                stale_space += 1
+                continue
+            sim = cosine(query_vector, vector)
             similarity[row["doc_id"]] = sim
             scored.append((row["doc_id"], sim))
+        if stale_space:
+            log.warning(
+                "comps_indexed_in_another_embedding_space",
+                count=stale_space,
+                hint="re-run scripts/reembed_corpus.py to repair",
+            )
         scored.sort(key=lambda kv: kv[1], reverse=True)
         return [doc_id for doc_id, _ in scored[:RANK_WINDOW]], sources, similarity
 

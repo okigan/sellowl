@@ -96,8 +96,18 @@ def _normalize(vector: list[float]) -> list[float]:
 
 
 def cosine(a: list[float], b: list[float]) -> float:
-    """Both sides are stored L2-normalized, so this is just a dot product."""
-    return sum(x * y for x, y in zip(a, b, strict=False))
+    """Both sides are stored L2-normalized, so this is just a dot product.
+
+    Vectors of different lengths come from different embedding spaces and
+    are not comparable at all. `strict=False` silently truncated to the
+    shorter one and returned a plausible-looking number: a corpus that had
+    been partly indexed while the embedding endpoint was down held 256-dim
+    lexical vectors alongside 384-dim bge ones, every cross-space comparison
+    scored like noise, and good comps were rejected for being "irrelevant".
+    """
+    if len(a) != len(b):
+        return 0.0
+    return sum(x * y for x, y in zip(a, b, strict=True))
 
 
 class HashingEmbedder:
