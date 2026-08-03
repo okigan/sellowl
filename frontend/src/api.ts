@@ -26,6 +26,10 @@ export interface Verdict {
   opportunity_usd: number | null;
   shipping_estimate: number | null;
   days_listed: number | null;
+  /** Median age of the sales behind sold_band. eBay gates completed
+   * listings behind a login, so this band may be served from the stored
+   * corpus rather than a fresh scrape. */
+  sold_data_age_days: number | null;
   // Which bucket the band actually came from: "model+condition" (narrowest),
   // "condition" (blended across models), or "all" (blended across
   // conditions too). The reason text already discloses "all" in prose; this

@@ -181,6 +181,7 @@ def build_verdict(
     sold_tier: str = "condition",
     local_tier: str = "condition",
     days_listed: int | None = None,
+    sold_data_age_days: int | None = None,
 ) -> Verdict:
     """Turn matched comp prices into a recommendation.
 
@@ -271,6 +272,7 @@ def build_verdict(
         opportunity_usd=opportunity,
         shipping_estimate=shipping,
         days_listed=days_listed,
+        sold_data_age_days=sold_data_age_days,
     )
 
 

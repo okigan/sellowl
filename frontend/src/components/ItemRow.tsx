@@ -115,6 +115,14 @@ export function ItemRow({ item, index }: { item: Item; index: number }) {
         <td className="px-3 py-3 text-[13px]">{money(item.ask_price)}</td>
         <td className="px-3 py-3 text-[13px]">
           <Band band={verdict?.sold_band ?? null} />
+          {verdict?.sold_data_age_days != null && verdict.sold_data_age_days > 45 && (
+            <span
+              className="ml-1 text-[10px] text-warn"
+              title={`These sales are a median ${verdict.sold_data_age_days} days old. eBay requires a signed-in session for completed listings, so this band came from stored data rather than a fresh look.`}
+            >
+              {verdict.sold_data_age_days}d old
+            </span>
+          )}
         </td>
         <td className="px-3 py-3 text-[13px]">
           <Band band={verdict?.local_band ?? null} />

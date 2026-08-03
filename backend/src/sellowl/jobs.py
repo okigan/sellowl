@@ -384,6 +384,7 @@ class Pipeline:
                 min_comps=self._s.min_comps,
             )
             item.verdict = build_verdict(
+                sold_data_age_days=_median_sale_age_days(sold),
                 ask_price=item.ask_price,
                 sold_prices=sold_matched.prices,
                 local_prices=local_matched.prices,
@@ -486,6 +487,20 @@ class Pipeline:
                 )
             )
         return out
+
+
+def _median_sale_age_days(sold: list[Comp]) -> int | None:
+    """How old the actual sales behind a band are.
+
+    eBay gates completed listings behind a login, so without a session the
+    sold band comes from the stored corpus rather than a fresh scrape. That
+    is the right fallback -- old real sales beat no sales -- but it has to be
+    visible, because the difference between "sells for $17" and "sold for $17
+    three months ago" is the difference between advice and trivia.
+    """
+    now = datetime.now(UTC)
+    ages = sorted((now - c.sold_at).days for c in sold if c.sold_at is not None)
+    return ages[len(ages) // 2] if ages else None
 
 
 def _queries_for(items: list[Item]) -> list[str]:

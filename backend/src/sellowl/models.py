@@ -140,6 +140,13 @@ class Verdict(BaseModel):
     # has no "listed on" date, so this is observed across runs (see
     # sightings.py) -- None means this store has only ever been analysed once.
     days_listed: int | None = None
+    # Median age, in days, of the actual sales behind sold_band. eBay gates
+    # completed listings behind a login, so with no session the band is served
+    # from the stored corpus rather than a fresh scrape -- correct, and worth
+    # saying out loud, because "what it sold for" quietly becoming "what it
+    # sold for a while ago" is the kind of drift a price recommendation must
+    # not hide.
+    sold_data_age_days: int | None = None
     # Which bucket the sold/local band actually came from: "model+condition"
     # (narrowest, most specific), "condition" (blended across models within
     # the item's condition grade), or "all" (blended across conditions too —

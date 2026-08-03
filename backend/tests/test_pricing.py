@@ -783,3 +783,35 @@ class TestStalenessInVerdict:
 
     def test_fresh_listing_says_nothing_about_age(self) -> None:
         assert "days without selling" not in self._verdict(3).reason
+
+
+class TestSoldDataAge:
+    """eBay gates completed listings behind a login, so without a session the
+    sold band is served from the stored corpus. That fallback is correct --
+    old real sales beat no sales -- but it must be visible: "sells for $17"
+    and "sold for $17 three months ago" are different claims."""
+
+    def _verdict(self, age: int | None) -> object:
+        return build_verdict(
+            ask_price=20.0,
+            sold_prices=[18.0, 19.0, 20.0, 21.0, 22.0],
+            local_prices=[],
+            attributes={"size_class": "small"},
+            condition=Condition.USABLE,
+            fees=FEES,
+            min_comps=1,
+            sold_data_age_days=age,
+        )
+
+    def test_age_is_reported_when_known(self) -> None:
+        assert self._verdict(97).sold_data_age_days == 97
+
+    def test_absent_when_unknown(self) -> None:
+        assert self._verdict(None).sold_data_age_days is None
+
+    def test_age_does_not_move_the_price(self) -> None:
+        """Disclosure, not an adjustment: how old the data is says nothing
+        about what the item is worth, only about our confidence."""
+        fresh, stale = self._verdict(2), self._verdict(400)
+        assert fresh.target == stale.target
+        assert fresh.opportunity_usd == stale.opportunity_usd
